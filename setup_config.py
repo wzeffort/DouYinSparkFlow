@@ -8,9 +8,9 @@ CHROME_HEADLESS = "chrome/chrome-headless-shell-win64/chrome-headless-shell.exe"
 CHROME_GITHUB_ACTION_PATH = "/home/runner/.cache/ms-playwright/chromium_headless_shell-1194/chrome-linux/headless_shell"
 
 PACK_CHROME = True  # 是否已经打包了 Chrome 浏览器
-PACK_CHROME_HEADLESS = True  # 打包的浏览器是否为无头浏览器
+PACK_CHROME_HEADLESS = False  # 打包的浏览器是否为无头浏览器
 HEADLESS = True # 是否以无头模式运行浏览器
-
+    
 multiTask = True  # 是否启用多任务,同时运行多个浏览器上下文处理多个账户操作
 taskCount = 5     # 并发任务数量
 
