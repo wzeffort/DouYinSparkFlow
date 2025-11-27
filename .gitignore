@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+.vscode/
+chrome/
+.DS_Store
+usersData.json
