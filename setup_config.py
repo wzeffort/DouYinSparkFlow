@@ -18,7 +18,7 @@ useProxy = False  # 是否使用代理
 proxyAddress = "http://your-proxy-address:port"
 
 messageTemplate = "[盖瑞]今日火花[加一]\n—— [右边] 每日一言 [左边] ——\n[API]"  # 默认消息模板
-hitokotoApi = "https://v1.hitokoto.cn/"  # 一言 API 地址
+hitokotoApi = "https://v1.hitokoto.cn/?c=i"  # 一言 API 地址
 
 
 def getBrowerExecutablePath():
