@@ -1,28 +1,20 @@
-from playwright.async_api import async_playwright
 import asyncio
 import json
 import os
-from setup_config import getBrowerExecutablePath
+from rich.console import Console
+from core.browser import get_browser
 
 xpaths = {
     "unique_id": """xpath=//*[contains(@id, "garfish_app_for_douyin_creator_pc_home")]/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[3]""",
     "name": """xpath=//*[contains(@id, "garfish_app_for_douyin_creator_pc_home")]/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]""",
 }
 
+console = Console()
+
 
 async def userLogin():
-    async with async_playwright() as playwright:
-        
-        is_chrome_packed, executable_path = getBrowerExecutablePath()
-        
-        if is_chrome_packed:
-            browser = await playwright.chromium.launch(
-                headless=False, executable_path=executable_path
-            )  # 启动浏览器
-        else:
-            browser = await playwright.chromium.launch(
-                headless=False
-            )  # 启动浏览器
+    playwright, browser = await get_browser(GUI=True)
+    try:
         context = await browser.new_context()
         page = await context.new_page()
 
@@ -34,8 +26,8 @@ async def userLogin():
         # 等待页面跳转或特定元素出现
         # 等待 XPath 元素加载完成
         await page.wait_for_selector(
-            'xpath=//*[contains(@id, "garfish_app_for_douyin_creator_pc_home")]/div/div[2]/div/div[2]/div[1]'
-            ,timeout=300000  # 设置输入超时时间为 5 分钟
+            'xpath=//*[contains(@id, "garfish_app_for_douyin_creator_pc_home")]/div/div[2]/div/div[2]/div[1]',
+            timeout=300000,  # 设置输入超时时间为 5 分钟
         )
 
         # 等待 unique_id 元素加载完成
@@ -84,9 +76,10 @@ async def userLogin():
 
         with open("usersData.json", "w", encoding="utf-8") as f:
             json.dump(userdata, f, ensure_ascii=False, indent=4)
-            
-        print("用户数据已保存到 usersData.json")
-        
+
+        console.print(f"[bold green]登录完成！已添加用户 {username}[/bold green]")
+    finally:
+        await playwright.stop()
         await browser.close()
 
 
