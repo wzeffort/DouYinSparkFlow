@@ -30,7 +30,7 @@ def get_environment():
     if getattr(sys, "frozen", False) and hasattr(sys, "_MEIPASS"):
         return Environment.PACKED
     elif os.getenv("GITHUB_ACTIONS") == "true":
-        return Environment.GIHUBACITON
+        return Environment.GITHUBACTION
     else:
         return Environment.LOCAL
 
