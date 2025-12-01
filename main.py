@@ -5,6 +5,7 @@ from rich.console import Console
 from rich.prompt import Prompt
 from core.login import userLogin
 from utils.github_action_config import print_github_action_config
+from core.tasks import runTasks
 
 # 初始化 rich 控制台
 console = Console()
@@ -38,9 +39,6 @@ def main():
         print_github_action_config()
 
     elif choice == "3":
-        from core.tasks import runTasks
-        import asyncio
-
         asyncio.run(runTasks())
 
 
@@ -55,9 +53,6 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if args.doTask:
-        from core.tasks import runTasks
-        import asyncio
-
         asyncio.run(runTasks())
     else:
         main()
