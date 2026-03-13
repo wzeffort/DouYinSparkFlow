@@ -1,6 +1,8 @@
 import asyncio
 import traceback
 import logging
+import os
+from datetime import datetime
 from utils.logger import setup_logger
 from utils.config import get_config, get_userData
 from core.msg_builder import build_message
@@ -38,26 +40,87 @@ async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
 
 async def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
+    if not targets:
+        logger.warning(f"账号 {username} 目标好友为空，跳过查找")
+        return
     # 定义目标元素和结束标志的选择器
     friends_tab_selector = 'xpath=//*[@id="sub-app"]/div/div/div[1]/div[2]'
-    target_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "semi-list-item-body semi-list-item-body-flex-start")]'
-    end_signal_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]//div[contains(@class, "status-wrapper-Tayo1v")]'
-    scrollable_friends_selector = 'xpath=//*[@id="sub-app"]/div/div[1]/div[2]/div[2]/div/div/div[3]/div/div/div/ul/div'
+    target_selector = 'xpath=//*[@id="sub-app"]//div[contains(@class, "semi-list-item-body") and contains(@class, "semi-list-item-body-flex-start")]'
+    end_signal_selector = 'xpath=//*[@id="sub-app"]//div[contains(@class, "status-wrapper-") or contains(@class, "status-wrapper")]'
+    scrollable_friends_selector = 'xpath=//*[@id="sub-app"]//ul/ancestor::div[contains(@class, "semi-scrolllist") or contains(@style, "overflow")][1]'
+
+    # 兼容页面结构变化的候选选择器
+    first_friend_selectors = [
+        'xpath=//*[@id="sub-app"]//span[contains(@class, "item-header-name-")]/ancestor::li[1]//div[1]',
+        'xpath=//*[@id="sub-app"]//ul//li[1]//div',
+        'css=#sub-app ul li:first-child div',
+    ]
+    login_hint_selectors = [
+        'text=登录',
+        'text=扫码登录',
+    ]
+
+    async def save_diagnostics(tag):
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        diag_dir = os.path.join("logs", "diagnostics")
+        os.makedirs(diag_dir, exist_ok=True)
+        screenshot_path = os.path.join(diag_dir, f"{tag}_{username}_{ts}.png")
+        html_path = os.path.join(diag_dir, f"{tag}_{username}_{ts}.html")
+        try:
+            await page.screenshot(path=screenshot_path, full_page=True)
+        except Exception:
+            logger.warning(f"账号 {username} 诊断截图失败")
+        try:
+            html = await page.content()
+            with open(html_path, "w", encoding="utf-8") as f:
+                f.write(html)
+        except Exception:
+            logger.warning(f"账号 {username} 诊断HTML保存失败")
 
     logger.debug(f"账号 {username} 开始查找目标好友列表")
     logger.debug(f"账号 {username} 目标好友列表: {targets}")
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
     # 点击好友标签页
-    await page.wait_for_selector(friends_tab_selector)
+    await page.wait_for_selector(friends_tab_selector, state="visible")
     await page.locator(friends_tab_selector).click()
 
     logger.debug(f"账号 {username} 进入好友列表页面")
 
     # 确保第一个好友元素加载完成
-    first_friend_selector = 'xpath=//*[@id="sub-app"]/div/div/div[2]/div[2]/div/div/div[1]/div/div/div/ul/div/div/div[1]/li/div'
-    await page.wait_for_selector(first_friend_selector)
-    await page.locator(first_friend_selector).click()  # 点击第一个好友，确保列表激活
+    first_friend_clicked = False
+    for selector in first_friend_selectors:
+        try:
+            await page.wait_for_selector(selector, state="visible", timeout=15000)
+            await page.locator(selector).click()  # 点击第一个好友，确保列表激活
+            first_friend_clicked = True
+            break
+        except Exception:
+            continue
+
+    if not first_friend_clicked:
+        # 兜底：如果列表已出现但上面选择器失效，尝试直接点击首个用户名
+        try:
+            name_locator = page.locator(
+                'xpath=//*[@id="sub-app"]//span[contains(@class, "item-header-name-")]'
+            )
+            if await name_locator.count() > 0:
+                await name_locator.first.click()
+                first_friend_clicked = True
+        except Exception:
+            pass
+
+    if not first_friend_clicked:
+        # 尝试识别登录/风控页面
+        for login_selector in login_hint_selectors:
+            if await page.locator(login_selector).count() > 0:
+                await save_diagnostics("login_required")
+                raise RuntimeError(f"账号 {username} 可能未登录或需要验证，请更新 cookies")
+
+        await save_diagnostics("friend_list_not_found")
+        raise RuntimeError(
+            f"账号 {username} 未找到好友列表元素，可能页面结构已变更"
+        )
 
     logger.debug(f"账号 {username} 已激活好友列表，开始滚动查找目标好友")
 
@@ -90,7 +153,7 @@ async def scroll_and_select_user(page, username, targets):
                         f"账号 {username} 选中目标好友 {targetName} 准备开始交互"
                     )
                     yield targetName
-                    break
+                    return
             except Exception as e:
                 traceback.print_exc()
         else:
@@ -102,9 +165,13 @@ async def scroll_and_select_user(page, username, targets):
             scrollable_element = await page.locator(
                 scrollable_friends_selector
             ).element_handle()
-            await page.evaluate(
-                "(element) => element.scrollTop += 100", scrollable_element
-            )
+            if scrollable_element:
+                await page.evaluate(
+                    "(element) => element.scrollTop += 200", scrollable_element
+                )
+            else:
+                # 兜底：直接页面滚轮滚动，避免因容器选择器失效导致卡死
+                await page.mouse.wheel(0, 600)
             logger.debug(f"账号 {username} 滚动好友列表以加载更多好友")
             await asyncio.sleep(1)  # 等待加载内容
             continue
@@ -112,6 +179,9 @@ async def scroll_and_select_user(page, username, targets):
 
 async def do_user_task(browser, username, cookies, targets, semaphore):
     async with semaphore:  # 使用信号量控制并发数量
+        if not targets:
+            logger.warning(f"账号 {username} 目标好友为空，跳过任务")
+            return
         context = await browser.new_context()  # 每个任务使用独立的上下文
         context.set_default_navigation_timeout(120000)  # 设置导航超时时间为 90 秒
         context.set_default_timeout(120000)  # 设置所有操作的默认超时时间为 120 秒
@@ -161,6 +231,7 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
             # 模拟按下回车键发送消息
             await chat_input.press("Enter")
             await asyncio.sleep(2)  # 发送完等待一会儿
+            break
 
         await context.close()  # 任务完成后关闭上下文
 
