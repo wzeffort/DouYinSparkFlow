@@ -10,6 +10,7 @@ from core.browser import get_browser
 
 
 complates = {}
+stop_after_first_send = asyncio.Event()
 
 config = get_config()
 userData = get_userData()
@@ -40,6 +41,9 @@ async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):
 
 async def scroll_and_select_user(page, username, targets):
     """尝试滚动并查找用户名"""
+    if stop_after_first_send.is_set():
+        logger.info("检测到已完成一次发送，停止继续查找好友")
+        return
     if not targets:
         logger.warning(f"账号 {username} 目标好友为空，跳过查找")
         return
@@ -82,6 +86,9 @@ async def scroll_and_select_user(page, username, targets):
 
     logger.debug(f"账号 {username} 点击进入好友标签页")
     # 点击好友标签页
+    if stop_after_first_send.is_set():
+        logger.info("检测到已完成一次发送，停止进入好友标签页")
+        return
     await page.wait_for_selector(friends_tab_selector, state="visible")
     await page.locator(friends_tab_selector).click()
 
@@ -129,6 +136,9 @@ async def scroll_and_select_user(page, username, targets):
     found_usernames = set()  # 存储找到的用户名
 
     while True:
+        if stop_after_first_send.is_set():
+            logger.info("检测到已完成一次发送，停止滚动查找")
+            return
         # 查找所有目标元素
         target_elements = await page.locator(target_selector).all()
 
@@ -179,6 +189,12 @@ async def scroll_and_select_user(page, username, targets):
 
 async def do_user_task(browser, username, cookies, targets, semaphore):
     async with semaphore:  # 使用信号量控制并发数量
+        if stop_after_first_send.is_set():
+            logger.info(f"账号 {username} 检测到已完成一次发送，跳过任务")
+            return
+        # 过滤空字符串目标
+        if isinstance(targets, list):
+            targets = [t for t in targets if str(t).strip()]
         if not targets:
             logger.warning(f"账号 {username} 目标好友为空，跳过任务")
             return
@@ -207,6 +223,11 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
             url="https://creator.douyin.com/creator-micro/data/following/chat",
         )
 
+        if stop_after_first_send.is_set():
+            logger.info(f"账号 {username} 检测到已完成一次发送，停止后续操作")
+            await context.close()
+            return
+
         logger.info(f"账号 {username} 开始发送消息")
         # 滚动并选择用户
         async for username in scroll_and_select_user(page, username, targets):
@@ -231,6 +252,7 @@ async def do_user_task(browser, username, cookies, targets, semaphore):
             # 模拟按下回车键发送消息
             await chat_input.press("Enter")
             await asyncio.sleep(2)  # 发送完等待一会儿
+            stop_after_first_send.set()
             break
 
         await context.close()  # 任务完成后关闭上下文
@@ -260,7 +282,12 @@ async def runTasks():
             tasks.append(do_user_task(browser, username, cookies, targets, semaphore))
 
         # 并发执行任务
-        await asyncio.gather(*tasks)
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        if stop_after_first_send.is_set():
+            # 有任务完成后设置停止标志，其余任务允许自然结束
+            for result in results:
+                if isinstance(result, Exception):
+                    logger.debug(f"任务异常已忽略: {result}")
     finally:
         await playwright.stop()
 
