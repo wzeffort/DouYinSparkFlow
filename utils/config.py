@@ -73,9 +73,9 @@ def get_userData():
     env = get_environment()
 
     if env == Environment.GITHUBACTION:
-        userDataJson = os.getenv("wz_data", None)
+        userDataJson = os.getenv("WZ_DATA", None) or os.getenv("GSY_DATA", None)
         if not userDataJson:
-            logger.error("环境变量 wz_data 未设置")
+            logger.error("环境变量 WZ_DATA 或 GSY_DATA 未设置")
             exit(1)
     else:
         if env == Environment.PACKED:
