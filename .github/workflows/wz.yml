@@ -25,7 +25,7 @@ jobs:
       run: playwright install chromium --with-deps --only-shell
     - name: Run DouYin Spark Flow
       env:
-        wz_data: ${{ secrets.wz_data }}
+        WZ_DATA: ${{ secrets.WZ_DATA }}
       run: python main.py --doTask
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}
