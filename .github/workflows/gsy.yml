@@ -1,8 +1,8 @@
-name: DouYin Spark Flow Schedule Run
+name: DouYin Spark Flow Schedule Run GSY
 on:
   workflow_dispatch: # 允许手动触发
   schedule: # 定时任务
-    - cron: "0 1 * * *" # 每天 1:00 UTC（对应北京时间 9:00）
+    - cron: "10 0 * * *" # 每天 0:10 UTC（对应北京时间 8:10）
 jobs:
   run-main:
     timeout-minutes: 20
@@ -25,7 +25,7 @@ jobs:
       run: playwright install chromium --with-deps --only-shell
     - name: Run DouYin Spark Flow
       env:
-        wz_data: ${{ secrets.wz_data }}
+        gsy_data: ${{ secrets.gsy_data }}
       run: python main.py --doTask
     - uses: actions/upload-artifact@v4
       if: ${{ !cancelled() }}

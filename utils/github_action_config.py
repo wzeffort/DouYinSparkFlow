@@ -33,7 +33,7 @@ def print_github_action_config():
     console.print(Panel(steps, title="前置步骤", expand=False, style="bold cyan"))
 
     secrets = {
-        "USER_DATA": compress_users_data()
+        "wz_data": compress_users_data()
     }
     if "proxyAddress" in config and config["proxyAddress"]:
         secrets["proxyAddress"] = config["proxyAddress"]
@@ -45,5 +45,5 @@ def print_github_action_config():
         console.rule(f"[bold cyan]{key}[/bold cyan]")
         console.print(f"[green]{value}[/green]\n")
 
-    pyperclip.copy(secrets["USER_DATA"])
-    console.print("[bold yellow]提示：[/bold yellow][bold magenta] USER_DATA 的值已自动写入剪贴板（建议直接粘贴，手动复制可能多出空白符导致出错） [/bold magenta]")
+    pyperclip.copy(secrets["wz_data"])
+    console.print("[bold yellow]提示：[/bold yellow][bold magenta] wz_data 的值已自动写入剪贴板（建议直接粘贴，手动复制可能多出空白符导致出错） [/bold magenta]")

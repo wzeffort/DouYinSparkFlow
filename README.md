@@ -78,11 +78,11 @@ cp usersData.example.json usersData.json
 
 项目可以部署到Github Action每日定时触发，在测试完毕后，你需要将本地代码推送到自己的Github仓库，你也可以选择直接克隆本仓库后续将config.json同步即可（如果你更改了设置的话）。本地通过usersData.json存储已经登录的账户凭证，为了防止信息泄露，Action不能像本地那样从明文读取这个配置，也不要将这个文件上传到Github，正确做法是将内容存放到`secrets`中
 
-> 方法: 在你的Github仓库下操作，选择settings->Environments，在下面新建一个`user-data`环境，继续在这个`user-data`环境的Environment secrets添加名为`USER_DATA`的项目
+> 方法: 在你的Github仓库下操作，选择settings->Environments，在下面新建一个`user-data`环境，继续在这个`user-data`环境的Environment secrets添加名为`wz_data`的项目
 
 ![创建`user-data`环境图](docs/images/屏幕截图%202026-02-14%20224915.png)
 
-关于这个配置的内容可以再次运行main.py,选择`2. 获取Github Action配置`将对应输出内容填入`USER_DATA`的值即可
+关于这个配置的内容可以再次运行main.py,选择`2. 获取Github Action配置`将对应输出内容填入`wz_data`的值即可
 
 ![填写配置内容图](docs/images/屏幕截图%202026-02-14%20224951.png)
 
