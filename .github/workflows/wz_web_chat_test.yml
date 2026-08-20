@@ -15,27 +15,22 @@ jobs:
           repository: 2061360308/DouYinSparkFlow
           ref: api
 
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: "3.11"
-
       - name: Set up Java
         uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: "17"
 
-      - name: Install dependencies
-        run: pip install -r requirements.txt
-
       - name: Send one WZ API test message
         env:
-          TASKS: >-
-            [{"username":"WZ","user_id":"96192738929","targets":[{"remark":"繁花","conversation_id":"0:1:93544891174:96192738929","conversation_short_id":"7069013403037090308","is_group":false}]}]
-          SKILL: hitokoto
-          SKILL_HITOKOTO: >-
-            {"message_template":"GitHub API托管测试-${{ github.run_id }}"}
-          COOKIES_96192738929: ${{ secrets.API_TEST_WZ_COOKIES }}
-          SESSIONID_96192738929: ${{ secrets.API_TEST_WZ_SESSIONID }}
-        run: python main.py
+          WZ_SESSIONID: ${{ secrets.API_TEST_WZ_SESSIONID }}
+        run: >-
+          java -jar res/kol_dy_msg-1.0.4-SNAPSHOT-private-message-cli.jar
+          --sessionId "$WZ_SESSIONID"
+          --userId "96192738929"
+          --type text
+          --conversationId "0:1:93544891174:96192738929"
+          --conversationShortId "7069013403037090308"
+          --content "GitHub API直连测试-${{ github.run_id }}"
+          --output json
+          --quiet true
