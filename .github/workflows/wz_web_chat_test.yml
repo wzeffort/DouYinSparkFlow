@@ -1,4 +1,4 @@
-name: DouYin Web Chat WZ Manual Test
+name: DouYin Upstream Dev WZ Manual Test
 
 on:
   workflow_dispatch:
@@ -9,7 +9,12 @@ jobs:
     runs-on: ubuntu-22.04
     environment: user-data
     steps:
-      - uses: actions/checkout@v4
+      - name: Check out upstream dev branch
+        uses: actions/checkout@v4
+        with:
+          repository: 2061360308/DouYinSparkFlow
+          # Current upstream dev head inspected on 2026-08-24.
+          ref: 68d17a30383c330de3346f0d7ab5dbe43e9aab35
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
@@ -22,12 +27,47 @@ jobs:
           pip install -r requirements.txt
       - name: Ensure browsers are installed
         run: playwright install chromium --with-deps --only-shell
-      - name: Run WZ web chat probe
+      - name: Prepare WZ data for upstream dev
         env:
           WZ_DATA: ${{ secrets.WZ_DATA }}
-        run: python web_chat_probe.py
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+
+          users = json.loads(os.environ["WZ_DATA"])
+          if not isinstance(users, list) or len(users) != 1:
+              raise SystemExit("WZ_DATA must contain exactly one account")
+
+          user = users[0]
+          targets = user.get("targets", [])
+          if len(targets) != 1:
+              raise SystemExit("WZ_DATA must contain exactly one target")
+
+          unique_id = str(user["unique_id"])
+          task = {
+              "username": user.get("username", "WZ"),
+              "unique_id": unique_id,
+              "targets": targets,
+          }
+          cookie_key = f"COOKIES_{unique_id}".upper()
+          values = {
+              "TASKS": json.dumps([task], ensure_ascii=True),
+              cookie_key: json.dumps(user["cookies"], ensure_ascii=True),
+          }
+          with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
+              for key, value in values.items():
+                  env_file.write(f"{key}<<__DY_EOF__\n{value}\n__DY_EOF__\n")
+          print("Prepared one WZ account and one target for upstream dev")
+          PY
+      - name: Run upstream dev WZ web chat test
+        env:
+          MESSAGE_TEMPLATE: "GitHub-dev-WZ-${{ github.run_id }}"
+          LOG_LEVEL: DEBUG
+        run: python main.py
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
         with:
-          name: wz-web-chat-probe-logs
+          name: upstream-dev-wz-logs
           path: logs/
