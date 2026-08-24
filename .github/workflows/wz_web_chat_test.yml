@@ -56,6 +56,9 @@ jobs:
               "TASKS": json.dumps([task], ensure_ascii=True),
               cookie_key: json.dumps(user["cookies"], ensure_ascii=True),
           }
+          # Derived values are not automatically covered by GitHub's masking of
+          # the original WZ_DATA secret, so mask them before exporting.
+          print(f"::add-mask::{values[cookie_key]}")
           with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as env_file:
               for key, value in values.items():
                   env_file.write(f"{key}<<__DY_EOF__\n{value}\n__DY_EOF__\n")
