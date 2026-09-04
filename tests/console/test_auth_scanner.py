@@ -389,6 +389,44 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(context.closed)
         self.assertTrue(browser.closed)
 
+    async def test_qr_ready_callback_receives_full_view_and_clear_qr_crop(self):
+        scanner, _browser, _context = self._scanner()
+        images = []
+
+        await scanner.run(
+            lambda full, crop: images.append((full, crop)),
+            lambda _value: None,
+            lambda: False,
+            on_view=lambda _full: None,
+        )
+
+        self.assertGreaterEqual(len(images), 1)
+        self.assertEqual(PAGE_PNG, images[0][0])
+        self.assertEqual(PNG, images[0][1])
+
+    async def test_warm_lifecycle_keeps_browser_but_never_reuses_consumed_context(self):
+        scanner, browser, context = self._scanner()
+        images = []
+
+        await scanner.ensure_prepared(max_age_seconds=120)
+
+        self.assertFalse(browser.closed)
+        self.assertFalse(context.closed)
+        result = await scanner.run_prepared(
+            lambda full, crop: images.append((full, crop)),
+            lambda _value: None,
+            lambda: False,
+            on_view=lambda _full: None,
+        )
+        self.assertEqual("测试昵称", result.display_name)
+        self.assertTrue(context.closed)
+        self.assertFalse(browser.closed)
+        self.assertEqual([(PAGE_PNG, PNG)], images)
+        self.assertFalse(scanner.has_prepared)
+
+        await scanner.close()
+        self.assertTrue(browser.closed)
+
     async def test_normal_verification_login_tab_is_not_extra_verification(self):
         scanner, _browser, context = self._scanner(
             mode="timeout", normal_verification_tab=True

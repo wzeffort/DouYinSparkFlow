@@ -16,6 +16,11 @@ SEARCH_INPUT_SELECTORS = (
     'input[placeholder="搜索"]',
     'input[placeholder*="搜索"]',
 )
+LOGIN_PROMPT_SELECTORS = (
+    "text=扫码登录",
+    "text=手机号登录",
+    "text=验证码登录",
+)
 
 logger = setup_logger(level=logging.DEBUG)
 
@@ -107,6 +112,25 @@ def _optional_string(value) -> str | None:
 
 class TargetNotFoundError(RuntimeError):
     """Raised when the requested friend is absent from the web chat list."""
+
+
+class WebChatLoginRequiredError(RuntimeError):
+    """Raised when the saved web-chat session has returned to a login page."""
+
+
+async def page_has_web_chat_login_prompt(page) -> bool:
+    """Return whether the Douyin chat page visibly asks the account to log in."""
+    for selector in LOGIN_PROMPT_SELECTORS:
+        try:
+            locator = page.locator(selector)
+            if await locator.count() == 0:
+                continue
+            candidate = locator.first if hasattr(locator, "first") else locator
+            if not hasattr(candidate, "is_visible") or await candidate.is_visible():
+                return True
+        except (AttributeError, TypeError):
+            return False
+    return False
 
 
 async def list_visible_web_chat_targets(page, timeout=30000):

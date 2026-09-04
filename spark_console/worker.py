@@ -4,24 +4,30 @@ import asyncio
 import os
 import signal
 import socket
+import uuid
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
 
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
+from spark_console.pii import PiiCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.executor import DouyinExecutor
 from spark_console.models import (
     DouyinAccount,
+    NotificationPreference,
     SparkTask,
     SparkTaskTargetIdentity,
     TaskRun,
+    User,
     WorkerLock,
 )
 from spark_console.scheduler import claim_next_due_task, finish_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
+from spark_console.services.task_capacity import TaskCapacityService
+from spark_console.services.notifications import NotificationService
 
 
 class Worker:
@@ -48,10 +54,14 @@ class Worker:
             execution_timeout_seconds or self.EXECUTION_TIMEOUT_SECONDS
         )
         self.cipher = CookieCipher(settings.cookie_key_file.read_bytes())
+        self.pii = (
+            PiiCipher(settings.pii_key_file.read_bytes())
+            if settings.email_enabled and settings.pii_key_file is not None
+            else None
+        )
         self._recover_interrupted_runs()
 
     def _recover_interrupted_runs(self) -> None:
-        retry_at = self.started_at + self.RETRY_DELAYS[0]
         with session_scope(self.engine) as db:
             interrupted = db.scalars(
                 select(TaskRun).where(
@@ -70,7 +80,11 @@ class Worker:
                 )
                 task = db.get(SparkTask, run.task_id)
                 if task is not None and task.enabled:
-                    task.next_run_at = retry_at
+                    task.next_run_at = TaskCapacityService(
+                        db, AuditService(db)
+                    ).next_available_run_at(
+                        self.started_at + self.RETRY_DELAYS[0], task.id
+                    )
 
     async def run_once(self, now: datetime | None = None):
         current_time = now or datetime.now(timezone.utc)
@@ -83,6 +97,7 @@ class Worker:
             lock.lease_until = current_time + timedelta(
                 seconds=max(30, self.settings.worker_poll_seconds * 3)
             )
+            TaskCapacityService(db, AuditService(db)).reconcile_all(current_time)
             run = claim_next_due_task(db, current_time, self.worker_id)
             if run is None:
                 return None
@@ -146,7 +161,7 @@ class Worker:
             run = db.get(TaskRun, run_id)
             task = db.get(SparkTask, task_id)
             if timed_out:
-                return finish_run(
+                finished = finish_run(
                     run,
                     "failed",
                     "worker_timeout",
@@ -154,8 +169,10 @@ class Worker:
                     "execution_timeout",
                     "页面操作超过 3 分钟，已终止本次执行",
                 )
+                self._record_task_failure_incident(db, task, finished, datetime.now(timezone.utc))
+                return finished
             if result is None:
-                return finish_run(
+                finished = finish_run(
                     run,
                     "failed",
                     "worker_error",
@@ -163,6 +180,8 @@ class Worker:
                     "unexpected_error",
                     "任务执行发生意外异常，Worker 已继续运行",
                 )
+                self._record_task_failure_incident(db, task, finished, datetime.now(timezone.utc))
+                return finished
             if result.success:
                 db.execute(
                     update(DouyinAccount)
@@ -170,13 +189,17 @@ class Worker:
                     .values(
                         validation_state="valid",
                         last_verified_at=datetime.now(timezone.utc),
+                        invalidated_at=None,
+                        invalid_reason_code=None,
+                        auth_incident_id=None,
                     )
                 )
-            elif result.error_code == "cookie_invalid":
-                db.execute(
-                    update(DouyinAccount)
-                    .where(DouyinAccount.id == account_id)
-                    .values(validation_state="invalid")
+            elif result.error_code in {"cookie_invalid", "login_expired"}:
+                self._record_auth_incident(
+                    db,
+                    db.get(DouyinAccount, account_id),
+                    result.error_code,
+                    datetime.now(timezone.utc),
                 )
             if not result.success and result.retryable:
                 retry = self._schedule_retry(
@@ -184,7 +207,7 @@ class Worker:
                 )
                 if retry is not None:
                     return retry
-            return finish_run(
+            finished = finish_run(
                 run,
                 "success" if result.success else "failed",
                 result.stage,
@@ -192,6 +215,128 @@ class Worker:
                 result.error_code,
                 result.error_summary,
             )
+            if not result.success:
+                self._record_task_failure_incident(
+                    db, task, finished, datetime.now(timezone.utc)
+                )
+            return finished
+
+    def _record_auth_incident(
+        self, db, account: DouyinAccount, reason_code: str, now: datetime
+    ) -> None:
+        account.validation_state = "invalid"
+        account.invalidated_at = account.invalidated_at or now
+        account.invalid_reason_code = reason_code
+        db.execute(
+            update(SparkTask)
+            .where(
+                SparkTask.douyin_account_id == account.id,
+                SparkTask.enabled.is_(True),
+            )
+            .values(enabled=False, next_run_at=None)
+        )
+        if account.auth_incident_id is not None:
+            return
+        incident_id = str(uuid.uuid4())
+        account.auth_incident_id = incident_id
+        if self.pii is None:
+            return
+        service = NotificationService(db, self.pii, AuditService(db))
+        user = db.get(User, account.owner_user_id)
+        preference = db.get(NotificationPreference, account.owner_user_id)
+        wants_email = preference is None or preference.douyin_login_expired_email
+        if (
+            user is None
+            or not wants_email
+            or not user.email_verified_at
+            or not user.email_ciphertext
+            or not user.email_nonce
+        ):
+            return
+        email = self.pii.decrypt_email(
+            user.email_ciphertext,
+            user.email_nonce,
+            aad=f"user:{user.id}".encode(),
+        )
+        token = service.create_action_token(user.id, incident_id, now)
+        service.enqueue_template(
+            user.id,
+            "douyin_login_expired",
+            email,
+            "douyin_expired",
+            {
+                "account_name": account.display_name,
+                "action_path": f"/email-actions/{token}",
+            },
+            f"douyin-auth:{incident_id}:email",
+            now=now,
+        )
+
+    def _record_task_failure_incident(
+        self,
+        db,
+        task: SparkTask,
+        run: TaskRun,
+        now: datetime,
+    ) -> None:
+        if self.pii is None or run.status != "failed":
+            return
+        recent = db.scalars(
+            select(TaskRun)
+            .where(TaskRun.task_id == task.id)
+            .order_by(TaskRun.scheduled_for.desc(), TaskRun.id.desc())
+        ).all()
+        streak = []
+        for candidate in recent:
+            if candidate.status != "failed":
+                break
+            streak.append(candidate)
+        if not streak:
+            return
+        first_failure = streak[-1]
+        if run.error_code == "target_not_found":
+            kind = "task_target_not_found"
+            reason = "请检查好友昵称或备注是否已经修改，并在任务中重新选择好友。"
+        elif len(streak) == 3 and run.error_code not in {
+            "login_expired",
+            "cookie_invalid",
+        }:
+            kind = "task_repeated_failure"
+            reason = "任务已连续执行失败 3 次，请查看执行记录并检查任务设置。"
+        else:
+            return
+        incident_key = f"task-failure:{task.id}:{first_failure.id}:{kind}"
+        service = NotificationService(db, self.pii, AuditService(db))
+        action_path = f"/tasks/{task.id}/edit"
+        user = db.get(User, task.owner_user_id)
+        preference = db.get(NotificationPreference, task.owner_user_id)
+        if (
+            user is None
+            or preference is None
+            or not preference.task_repeated_failure_email
+            or not user.email_verified_at
+            or not user.email_ciphertext
+            or not user.email_nonce
+        ):
+            return
+        email = self.pii.decrypt_email(
+            user.email_ciphertext,
+            user.email_nonce,
+            aad=f"user:{user.id}".encode(),
+        )
+        service.enqueue_template(
+            user.id,
+            kind,
+            email,
+            "task_failure",
+            {
+                "target_name": task.target_name,
+                "reason": reason,
+                "action_path": action_path,
+            },
+            f"{incident_key}:email",
+            now=now,
+        )
 
     def _schedule_retry(self, db, task, run, now, stage):
         retry_codes = tuple(
@@ -211,14 +356,16 @@ class Worker:
             if code in used_codes:
                 continue
             minutes = int(delay.total_seconds() // 60)
-            task.next_run_at = now + delay
+            task.next_run_at = TaskCapacityService(
+                db, AuditService(db)
+            ).next_available_run_at(now + delay, task.id)
             return finish_run(
                 run,
                 "failed",
                 stage,
                 now,
                 code,
-                f"发送前遇到临时故障，已安排 {minutes} 分钟后重试",
+                f"发送前遇到临时故障，已安排不少于 {minutes} 分钟后的空闲时段重试",
             )
         return None
 

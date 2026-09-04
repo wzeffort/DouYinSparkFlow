@@ -12,6 +12,8 @@ x-common: &common
     - spark-data:/data
     - ./secrets/cookie.key:/run/secrets/cookie.key:ro
     - ./secrets/session.key:/run/secrets/session.key:ro
+    - ./secrets/pii.key:/run/secrets/pii.key:ro
+    - ./runtime:/run/spark-health:ro
   networks: [spark-private]
   read_only: true
   security_opt: [no-new-privileges:true]
@@ -46,6 +48,12 @@ services:
     mem_limit: 768m
     cpus: 1.0
     tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+  spark-notifier:
+    <<: *common
+    command: [python, -m, spark_console.notifier]
+    mem_limit: 192m
+    cpus: 0.25
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
 
 volumes:
   spark-data:

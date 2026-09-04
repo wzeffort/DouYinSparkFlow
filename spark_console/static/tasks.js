@@ -49,3 +49,48 @@
   refresh.addEventListener("click", loadTargets);
   loadTargets();
 })();
+
+(() => {
+  const time = document.querySelector("#task-send-time");
+  const status = document.querySelector("#task-slot-status");
+  const suggestions = document.querySelector("#task-slot-suggestions");
+  if (!time || !status || !suggestions) return;
+
+  async function checkSlot() {
+    suggestions.replaceChildren();
+    if (!time.value) {
+      status.textContent = "选择时间后检查全平台剩余名额";
+      return;
+    }
+    status.textContent = "正在检查执行时段…";
+    try {
+      const params = new URLSearchParams({ send_time: time.value });
+      if (time.dataset.excludeTaskId) params.set("exclude_task_id", time.dataset.excludeTaskId);
+      const response = await fetch(`/tasks/availability?${params.toString()}`, {
+        credentials: "same-origin",
+        headers: { Accept: "application/json" },
+      });
+      const body = await response.json();
+      if (!response.ok) throw new Error(body.detail || "时段检查失败");
+      status.textContent = body.available
+        ? "该时间满足四分钟安全间隔，可创建任务"
+        : "该时间不满足四分钟安全间隔，请选择附近空闲时间";
+      for (const item of body.suggestions || []) {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "slot-suggestion";
+        button.textContent = item;
+        button.addEventListener("click", () => {
+          time.value = item;
+          checkSlot();
+        });
+        suggestions.appendChild(button);
+      }
+    } catch (error) {
+      status.textContent = error.message || "时段检查失败，提交时会再次校验";
+    }
+  }
+
+  time.addEventListener("change", checkSlot);
+  if (time.value) checkSlot();
+})();

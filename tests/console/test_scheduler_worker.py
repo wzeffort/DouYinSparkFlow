@@ -16,6 +16,7 @@ from spark_console.models import (
     DouyinAccount,
     SparkTask,
     SparkTaskTargetIdentity,
+    TaskQuotaPolicy,
     TaskRun,
     User,
     WorkerLock,
@@ -101,6 +102,17 @@ class _CookieInvalidExecutor:
         )
 
 
+class _LoginExpiredExecutor:
+    async def execute(self, *_args, **_kwargs):
+        return ExecutionResult(
+            False,
+            ExecutionStage.AUTHENTICATING,
+            "login_expired",
+            "抖音账号信息已过期，请重新登录后再试",
+            retryable=False,
+        )
+
+
 class _BlockingExecutor:
     def __init__(self):
         self.started = asyncio.Event()
@@ -154,6 +166,64 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(now + timedelta(seconds=30), lock.lease_until.replace(tzinfo=timezone.utc))
             engine.dispose()
 
+    async def test_worker_pauses_due_task_before_executor_when_quota_is_unavailable(self):
+        now = datetime(2026, 9, 1, 1, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            (data_dir / "cookie.key").write_bytes(b"w" * 32)
+            (data_dir / "session.key").write_bytes(b"s" * 32)
+            settings = Settings(
+                data_dir=data_dir,
+                database_url=f"sqlite:///{data_dir / 'quota-worker.db'}",
+                cookie_key_file=data_dir / "cookie.key",
+                session_key_file=data_dir / "session.key",
+            )
+            engine = create_engine(settings.database_url)
+            create_schema(engine)
+            try:
+                with Session(engine) as session:
+                    session.get(TaskQuotaPolicy, 1).default_amount = 0
+                    user = User(username="quota-expired", password_hash="hash")
+                    session.add(user)
+                    session.flush()
+                    account = AccountService(
+                        session, CookieCipher(b"w" * 32), AuditService(session)
+                    ).create(user.id, "额度账号", '[{"name":"sid","value":"x"}]')
+                    task = SparkTask(
+                        owner_user_id=user.id,
+                        douyin_account_id=account.id,
+                        target_name="不应发送",
+                        send_time="09:00",
+                        message_template="消息",
+                        enabled=True,
+                        next_run_at=now,
+                    )
+                    session.add(task)
+                    session.commit()
+                    task_id = task.id
+                executor = _RecordingExecutor()
+
+                result = await Worker(
+                    settings, engine, executor=executor, started_at=now
+                ).run_once(now)
+
+                self.assertIsNone(result)
+                self.assertIsNone(executor.credential_version)
+                with Session(engine) as session:
+                    stored = session.get(SparkTask, task_id)
+                    self.assertFalse(stored.enabled)
+                    self.assertIsNone(stored.next_run_at)
+                    self.assertEqual(
+                        0,
+                        len(
+                            session.scalars(
+                                select(TaskRun).where(TaskRun.task_id == task_id)
+                            ).all()
+                        ),
+                    )
+            finally:
+                engine.dispose()
+
     async def test_worker_marks_account_invalid_after_authentication_rejection(self):
         now = datetime(2026, 8, 25, 1, 0, tzinfo=timezone.utc)
         with tempfile.TemporaryDirectory() as directory:
@@ -180,6 +250,68 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("cookie_invalid", result.error_code)
                 with Session(engine) as session:
                     self.assertEqual("invalid", session.get(DouyinAccount, account_id).validation_state)
+            finally:
+                engine.dispose()
+
+    async def test_worker_marks_account_invalid_and_does_not_retry_expired_login(self):
+        now = datetime(2026, 8, 31, 1, 0, tzinfo=timezone.utc)
+        with tempfile.TemporaryDirectory() as directory:
+            data_dir = Path(directory)
+            (data_dir / "cookie.key").write_bytes(b"w" * 32)
+            (data_dir / "session.key").write_bytes(b"s" * 32)
+            settings = Settings(
+                data_dir=data_dir,
+                database_url=f"sqlite:///{data_dir / 'expired.db'}",
+                cookie_key_file=data_dir / "cookie.key",
+                session_key_file=data_dir / "session.key",
+            )
+            engine = create_engine(settings.database_url)
+            create_schema(engine)
+            try:
+                with Session(engine) as session:
+                    user = User(username="expired-owner", password_hash="hash")
+                    session.add(user)
+                    session.flush()
+                    account = AccountService(
+                        session, CookieCipher(b"w" * 32), AuditService(session)
+                    ).create(
+                        user.id,
+                        "过期账号",
+                        '[{"name":"sid","value":"x"}]',
+                    )
+                    account.validation_state = "valid"
+                    task = SparkTask(
+                        owner_user_id=user.id,
+                        douyin_account_id=account.id,
+                        target_name="好友",
+                        send_time="09:00",
+                        message_template="消息",
+                        enabled=True,
+                        next_run_at=now,
+                    )
+                    session.add(task)
+                    session.commit()
+                    account_id = account.id
+                    task_id = task.id
+
+                result = await Worker(
+                    settings,
+                    engine,
+                    executor=_LoginExpiredExecutor(),
+                    started_at=now,
+                ).run_once(now)
+
+                self.assertEqual("login_expired", result.error_code)
+                self.assertEqual("抖音账号信息已过期，请重新登录后再试", result.error_summary)
+                with Session(engine) as session:
+                    self.assertEqual(
+                        "invalid", session.get(DouyinAccount, account_id).validation_state
+                    )
+                    runs = session.scalars(
+                        select(TaskRun).where(TaskRun.task_id == task_id)
+                    ).all()
+                    self.assertEqual(1, len(runs))
+                    self.assertEqual("login_expired", runs[0].error_code)
             finally:
                 engine.dispose()
 
@@ -565,11 +697,11 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual("retry_scheduled_1m", first.error_code)
                 with Session(engine) as session:
                     self.assertEqual(
-                        now + timedelta(minutes=1),
+                        now + timedelta(minutes=4),
                         session.get(SparkTask, task_id).next_run_at.replace(tzinfo=timezone.utc),
                     )
 
-                second_time = now + timedelta(minutes=1)
+                second_time = now + timedelta(minutes=4)
                 second = await worker.run_once(second_time)
                 self.assertEqual("retry_scheduled_5m", second.error_code)
                 with Session(engine) as session:

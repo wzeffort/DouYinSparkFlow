@@ -1,0 +1,35 @@
+{% extends "base.html" %}{% block content %}
+<header class="page-head"><div><span class="eyebrow">QUOTA TIMELINE</span><h1>{{ target.username }} 的额度时间轴</h1><p>所有额度都由时间范围决定；到期或撤销后，超额任务会自动暂停但不会删除。</p></div><a class="button quiet" href="/admin#users">返回用户管理</a></header>
+{% if notice_message %}<div class="notice" role="status">{{ notice_message }}</div>{% endif %}
+<section class="quota-overview">
+  <article><span>启用任务</span><strong>{{ quota_summary.active_usage }}/{{ quota_summary.limit }}</strong></article>
+  <article><span>保存任务</span><strong>{{ quota_summary.saved_usage }}/{{ quota_summary.max_saved_tasks }}</strong></article>
+</section>
+<section class="panel quota-create-panel">
+  <div class="section-head"><div><h2>添加额度</h2><p>到期时间留空表示长期有效；所有时间按北京时间填写。</p></div></div>
+  <form method="post" action="/admin/users/{{ target.id }}/quota-grants" class="quota-grant-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>额度名称<input name="label" maxlength="64" placeholder="例如：两个月体验额度" required></label>
+    <label>增加数量<input type="number" name="amount" min="1" max="100" value="5" required></label>
+    <label>开始时间<input type="datetime-local" name="starts_at" value="{{ now_local }}" required></label>
+    <label>到期时间<input type="datetime-local" name="expires_at"><small class="field-hint">留空表示长期有效</small></label>
+    <button>添加额度</button>
+  </form>
+</section>
+<section class="quota-timeline" aria-label="额度时间轴">
+{% for item in quota_summary.grants %}
+  <article class="panel quota-grant-card quota-{{ item.status }}">
+    <header><div><span class="pill {{ 'good' if item.status == 'active' else ('warn' if item.status in ('future','expiring') else 'off') }}">{{ {'active':'生效中','expiring':'即将到期','future':'未开始','expired':'已到期','revoked':'已撤销'}[item.status] }}</span><h2>{{ item.grant.label }}</h2></div><strong>+{{ item.grant.amount }}</strong></header>
+    <form method="post" action="/admin/quota-grants/{{ item.grant.id }}/edit" class="quota-grant-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+      <label>名称<input name="label" maxlength="64" value="{{ item.grant.label }}" required></label>
+      <label>数量<input type="number" name="amount" min="1" max="100" value="{{ item.grant.amount }}" required></label>
+      <label>开始<input type="datetime-local" name="starts_at" value="{{ item.grant.starts_at|datetime_local }}" required></label>
+      <label>到期<input type="datetime-local" name="expires_at" value="{{ item.grant.expires_at|datetime_local }}"></label>
+      <button class="quiet"{% if item.status == 'revoked' %} disabled{% endif %}>保存修改</button>
+    </form>
+    {% if item.status != 'revoked' %}<form method="post" action="/admin/quota-grants/{{ item.grant.id }}/revoke" class="quota-revoke-form" onsubmit="return confirm('撤销后超额任务会立即暂停，确定继续？')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet">撤销额度</button></form>{% endif %}
+  </article>
+{% endfor %}
+</section>
+{% endblock %}

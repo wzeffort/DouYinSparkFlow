@@ -1,0 +1,16 @@
+[Unit]
+Description=DouYin Spark host health snapshot collector
+After=docker.service network-online.target
+
+[Service]
+Type=oneshot
+User=root
+Group=root
+ExecStart=/usr/bin/python3 /opt/douyin-spark-console/ops/spark_health_collector.py --output /opt/douyin-spark-console/runtime/host-health.json --state /opt/douyin-spark-console/runtime/collector-state.json --interface eth0
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/douyin-spark-console/runtime
+RestrictAddressFamilies=AF_UNIX
+UMask=0022

@@ -4,10 +4,10 @@ import secrets
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from spark_console.models import User, WebSession
+from spark_console.models import User, UserNotification, WebSession
 from spark_console.security import SessionService
 
 
@@ -41,15 +41,26 @@ class WebAuth:
         if not supplied or not secrets.compare_digest(record.csrf_token, supplied):
             raise HTTPException(403, "CSRF validation failed")
 
+    @staticmethod
+    def _page_context(db: Session, user: User, record: WebSession) -> dict:
+        unread = db.scalar(
+            select(func.count(UserNotification.id)).where(
+                UserNotification.user_id == user.id,
+                UserNotification.read_at.is_(None),
+            )
+        ) or 0
+        return {
+            "user": user,
+            "csrf_token": record.csrf_token,
+            "is_admin": user.role == "admin",
+            "unread_notification_count": unread,
+        }
+
     def user_context(
         self, request: Request, db: Session
     ) -> tuple[User, WebSession, dict]:
         user, record = self.current(request, db)
-        return user, record, {
-            "user": user,
-            "csrf_token": record.csrf_token,
-            "is_admin": user.role == "admin",
-        }
+        return user, record, self._page_context(db, user, record)
 
     def admin_context(
         self, request: Request, db: Session
@@ -57,8 +68,4 @@ class WebAuth:
         user, record = self.current(request, db)
         if user.role != "admin":
             raise HTTPException(404)
-        return user, record, {
-            "user": user,
-            "csrf_token": record.csrf_token,
-            "is_admin": True,
-        }
+        return user, record, self._page_context(db, user, record)

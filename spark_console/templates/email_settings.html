@@ -1,0 +1,72 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="email-settings-page">
+  <header class="email-hero">
+    <div class="email-hero-copy">
+      <span class="email-hero-kicker"><i></i> 账号安全通道</span>
+      <h1>邮箱与通知</h1>
+      <p>当抖音账号需要重新登录时，我们会及时提醒你，不必每天打开网站检查。</p>
+    </div>
+    <div class="email-hero-mark" aria-hidden="true"><span>✉</span></div>
+  </header>
+
+  {% if notice == 'verified' %}
+    <div class="email-toast email-toast-success" role="status">邮箱验证成功，异常提醒现已开启。</div>
+  {% elif notice == 'saved' %}
+    <div class="email-toast email-toast-success" role="status">通知偏好已保存。</div>
+  {% elif notice %}
+    <div class="email-toast email-toast-error" role="alert">邮箱设置未保存，请检查地址后重试。</div>
+  {% endif %}
+
+  <div class="email-settings-grid">
+    <section class="panel email-settings-card email-bind-card">
+      <header class="email-card-heading">
+        <span class="email-card-icon" aria-hidden="true">@</span>
+        <div><span class="email-card-label">接收地址</span><h2>{% if email_masked %}更换绑定邮箱{% else %}绑定邮箱{% endif %}</h2></div>
+      </header>
+      {% if email_masked %}
+        <div class="email-current-state is-verified"><span class="email-state-dot"></span><div><small>当前已验证</small><strong>{{ email_masked }}</strong></div></div>
+      {% else %}
+        <div class="email-current-state"><span class="email-state-dot"></span><div><small>尚未绑定</small><strong>现有账号仍可正常使用</strong></div></div>
+      {% endif %}
+      <form method="post" action="/settings/email/start" class="email-bind-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="settings-email">{% if email_masked %}新的邮箱地址{% else %}邮箱地址{% endif %}</label>
+        <div class="email-bind-row"><input id="settings-email" type="email" name="email" maxlength="254" autocomplete="email" placeholder="name@example.com" required><button type="submit">发送验证码</button></div>
+      </form>
+      {% if verification_id %}
+        <div class="inline-verification" id="email-verification" role="region" aria-labelledby="email-verification-title">
+          <div class="inline-verification-heading">
+            <span class="email-state-dot"></span>
+            <div><strong id="email-verification-title">验证码已发送</strong><small>请输入邮件中的 6 位数字，10 分钟内有效</small></div>
+          </div>
+          {% if verification_error %}<div class="form-error" role="alert">{{ verification_error }}</div>{% endif %}
+          <form method="post" action="/settings/email/verify/{{ verification_id }}" class="inline-verification-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="settings-email-code">验证码</label>
+            <div class="email-bind-row"><input id="settings-email-code" name="code" inputmode="numeric" autocomplete="one-time-code" minlength="6" maxlength="6" pattern="[0-9]{6}" placeholder="输入 6 位验证码" required autofocus><button type="submit">完成验证</button></div>
+          </form>
+        </div>
+      {% endif %}
+      <p class="email-privacy-note"><span aria-hidden="true">⌁</span> 邮箱将加密保存，仅用于你选择的重要提醒。</p>
+    </section>
+
+    <section class="panel email-settings-card email-preference-card">
+      <header class="email-card-heading">
+        <span class="email-card-icon preference-icon" aria-hidden="true">◌</span>
+        <div><span class="email-card-label">提醒范围</span><h2>选择接收哪些邮件</h2></div>
+      </header>
+      <form method="post" action="/settings/email/preferences" class="preference-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <div class="preference-list">
+          <label class="preference-option"><input type="checkbox" name="douyin_login_expired_email" value="1" {% if preference.douyin_login_expired_email %}checked{% endif %}><span class="preference-switch" aria-hidden="true"></span><span class="preference-copy"><strong>抖音登录状态失效</strong><small>需要重新绑定账号时立即提醒</small></span><span class="preference-badge">推荐</span></label>
+          <label class="preference-option"><input type="checkbox" name="task_repeated_failure_email" value="1" {% if preference.task_repeated_failure_email %}checked{% endif %}><span class="preference-switch" aria-hidden="true"></span><span class="preference-copy"><strong>任务连续失败</strong><small>同一任务多次执行异常时提醒</small></span></label>
+          <label class="preference-option"><input type="checkbox" name="quota_expiring_email" value="1" {% if preference.quota_expiring_email %}checked{% endif %}><span class="preference-switch" aria-hidden="true"></span><span class="preference-copy"><strong>任务额度即将到期</strong><small>额度到期前收到一次提示</small></span></label>
+          <label class="preference-option"><input type="checkbox" name="quota_expired_email" value="1" {% if preference.quota_expired_email %}checked{% endif %}><span class="preference-switch" aria-hidden="true"></span><span class="preference-copy"><strong>任务额度已经到期</strong><small>额度失效并影响任务时提醒</small></span></label>
+        </div>
+        <footer class="preference-footer"><p>登录失效提醒已启用，其余类型会保存你的选择并陆续开放。</p><button type="submit">保存偏好</button></footer>
+      </form>
+    </section>
+  </div>
+</div>
+{% endblock %}

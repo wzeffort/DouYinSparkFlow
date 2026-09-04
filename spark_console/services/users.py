@@ -12,13 +12,22 @@ from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.audits import AuditService
 
 
-def validate_registration_password(password: str) -> None:
-    if (
-        len(password) < 10
-        or not any(character.isalpha() for character in password)
-        or not any(character.isdigit() for character in password)
+def validate_registration_username(username: str) -> str:
+    name = username.strip().lower()
+    if not (3 <= len(name) <= 32) or not all(
+        character.isalnum() or character in "_-" for character in name
     ):
-        raise ValidationError("注册信息或邀请码无效")
+        raise ValidationError("用户名须为 3–32 位字母、数字、下划线或短横线")
+    return name
+
+
+def validate_registration_password(password: str) -> None:
+    if len(password) < 10:
+        raise ValidationError("密码至少需要 10 位")
+    if not any(character.isalpha() for character in password):
+        raise ValidationError("密码必须包含至少一个字母")
+    if not any(character.isdigit() for character in password):
+        raise ValidationError("密码必须包含至少一个数字")
 
 
 class UserService:
@@ -33,13 +42,11 @@ class UserService:
         return "".join(secrets.choice(alphabet) for _ in range(18))
 
     def create(self, username: str, password: str | None = None, role: str = "user") -> tuple[User, str]:
-        name = username.strip().lower()
-        if not (3 <= len(name) <= 32) or not all(c.isalnum() or c in "_-" for c in name):
-            raise ValidationError("用户名须为 3–32 位字母、数字、下划线或短横线")
+        name = validate_registration_username(username)
         if role not in {"user", "admin"}:
             raise ValidationError("invalid role")
         if self.session.scalar(select(User).where(User.username == name)):
-            raise Conflict("用户名已存在")
+            raise Conflict("该用户名不可用，请更换")
         temporary = password or self.temporary_password()
         user = User(
             username=name,
@@ -49,6 +56,12 @@ class UserService:
         )
         self.session.add(user)
         self.session.flush()
+        if role == "user":
+            from spark_console.services.task_capacity import TaskCapacityService
+
+            TaskCapacityService(self.session, self.audit).bootstrap_user(
+                user, use_current_policy=True
+            )
         self.audit.write(None, "user.created", "user", user.id)
         return user, temporary
 

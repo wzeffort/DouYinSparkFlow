@@ -43,7 +43,11 @@ class ScanSessionServiceTests(unittest.TestCase):
         scan = self.service.start(self.owner.id)
         claimed = self.service.claim_next()
         self.assertEqual(scan.id, claimed.id)
-        return self.service.publish_qr(scan.id, PNG_SIGNATURE + b"fixture")
+        return self.service.publish_qr(
+            scan.id,
+            PNG_SIGNATURE + b"full-fixture",
+            PNG_SIGNATURE + b"crop-fixture",
+        )
 
     def _account(self) -> DouyinAccount:
         account = DouyinAccount(
@@ -90,6 +94,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         awaiting = self._claim_and_publish()
         self.assertEqual(ScanStatus.AWAITING_SCAN, awaiting.status)
         self.assertTrue(awaiting.qr_png.startswith(PNG_SIGNATURE))
+        self.assertTrue(awaiting.qr_crop_png.startswith(PNG_SIGNATURE))
 
         confirming = self.service.mark_confirming(awaiting.id)
         self.assertEqual(ScanStatus.CONFIRMING, confirming.status)
@@ -99,6 +104,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertEqual(ScanStatus.SUCCEEDED, completed.status)
         self.assertEqual(account.id, completed.account_id)
         self.assertIsNone(completed.qr_png)
+        self.assertIsNone(completed.qr_crop_png)
         self.assertIsNone(completed.slot)
         self.assertIsNone(completed.error_code)
         self.assertEqual(self.clock.value, completed.finished_at)
@@ -190,10 +196,13 @@ class ScanSessionServiceTests(unittest.TestCase):
         ):
             with self.subTest(size=len(invalid)):
                 with self.assertRaises(ValidationError):
-                    self.service.publish_qr(scan.id, invalid)
+                    self.service.publish_qr(scan.id, invalid, PNG_SIGNATURE + b"crop")
+                with self.assertRaises(ValidationError):
+                    self.service.publish_qr(scan.id, PNG_SIGNATURE + b"full", invalid)
 
         self.assertEqual(ScanStatus.LOADING_QR, scan.status)
         self.assertIsNone(scan.qr_png)
+        self.assertIsNone(scan.qr_crop_png)
 
     def test_cancel_clears_qr_and_releases_global_slot(self):
         scan = self._claim_and_publish()
@@ -203,6 +212,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertEqual(ScanStatus.CANCELLED, cancelled.status)
         self.assertEqual("cancelled", cancelled.error_code)
         self.assertIsNone(cancelled.qr_png)
+        self.assertIsNone(cancelled.qr_crop_png)
         self.assertIsNone(cancelled.slot)
         self.service.start(self.other.id)
 
@@ -214,6 +224,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertEqual(ScanStatus.FAILED, failed.status)
         self.assertEqual("qr_load_failed", failed.error_code)
         self.assertIsNone(failed.qr_png)
+        self.assertIsNone(failed.qr_crop_png)
         self.assertIsNone(failed.slot)
         self.service.start(self.other.id)
 
@@ -235,6 +246,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         self.assertEqual(ScanStatus.EXPIRED, scan.status)
         self.assertEqual("login_timeout", scan.error_code)
         self.assertIsNone(scan.qr_png)
+        self.assertIsNone(scan.qr_crop_png)
         self.assertIsNone(scan.slot)
         self.assertEqual(self.clock.value, scan.finished_at)
         self.assertEqual(0, self.service.expire_stale())

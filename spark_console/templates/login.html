@@ -1,8 +1,9 @@
 {% extends "base.html" %}{% block content %}
 <section class="auth-card"><div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
 <h1>欢迎回来</h1><p class="muted">使用管理员提供的账号登录</p>
+{% if password_reset %}<div class="email-toast email-toast-success" role="status">密码已更新，请使用新密码登录。</div>{% endif %}
 {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
-<form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" required></label><label>密码<input type="password" name="password" autocomplete="current-password" required></label><button type="submit">登录控制台</button></form>
+<form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" required></label><label><span class="login-password-head"><span>密码</span>{% if email_enabled %}<a href="/forgot-password" title="通过邮箱找回密码"><span aria-hidden="true">?</span> 忘记密码？</a>{% endif %}</span><input type="password" name="password" autocomplete="current-password" required></label><button type="submit">登录控制台</button></form>
 <p class="auth-link">还没有账号？<a href="/register">使用邀请码注册</a></p>
 <p class="fine">账号凭据与抖音 Cookie 会加密保存，不会在页面再次展示。</p></section>
 {% endblock %}

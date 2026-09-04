@@ -1,0 +1,17 @@
+{% extends "base.html" %}{% block content %}
+<section class="auth-card">
+  <div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>EMAIL VERIFY</small></span></div>
+  <h1>验证邮箱</h1>
+  <p class="muted">验证码已发送{% if username %}，完成验证后即可激活账号 {{ username }}{% endif %}。</p>
+  {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+  {% if notice %}<div class="status-banner success" role="status">{{ notice }}</div>{% endif %}
+  <form method="post" class="stack">
+    <label>6 位验证码<input name="code" inputmode="numeric" autocomplete="one-time-code" minlength="6" maxlength="6" pattern="[0-9]{6}" required></label>
+    <button type="submit">验证并完成注册</button>
+  </form>
+  <form method="post" action="/register/verify/{{ pending_id }}/resend" class="inline-form">
+    <button class="quiet" type="submit">重新发送验证码</button>
+  </form>
+  <p class="auth-link"><a href="/register">返回重新注册</a></p>
+</section>
+{% endblock %}

@@ -4,6 +4,7 @@ import asyncio
 import logging
 import os
 import signal
+import time
 
 from sqlalchemy.orm import Session
 
@@ -22,6 +23,7 @@ from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
 from spark_console.services.scan_sessions import ACTIVE_STATUSES, ScanSessionService
+from spark_console.services.tasks import schedule_recent_safe_failures
 
 
 logger = logging.getLogger(__name__)
@@ -54,6 +56,28 @@ class AuthWorker:
             service.expire_stale()
             service.fail_abandoned_browser_sessions()
 
+    async def prepare_scanner(self) -> None:
+        prepare = getattr(self.scanner, "ensure_prepared", None)
+        if callable(prepare):
+            started = time.monotonic()
+            try:
+                prepared = await prepare(
+                    max_age_seconds=self.settings.auth_warm_max_age_seconds
+                )
+            except Exception:
+                await self.close()
+                raise
+            if prepared is not False:
+                logger.info(
+                    "auth warm slot ready duration_ms=%d",
+                    round((time.monotonic() - started) * 1000),
+                )
+
+    async def close(self) -> None:
+        close = getattr(self.scanner, "close", None)
+        if callable(close):
+            await close()
+
     async def run_once(self, stopping: asyncio.Event | None = None) -> bool:
         with session_scope(self.engine) as db:
             scan = ScanSessionService(db).claim_next()
@@ -63,9 +87,9 @@ class AuthWorker:
             owner_id = scan.owner_user_id
             expires_at = scan.expires_at
 
-        def on_qr(png: bytes) -> None:
+        def on_qr(png: bytes, qr_crop_png: bytes | None = None) -> None:
             with session_scope(self.engine) as db:
-                ScanSessionService(db).publish_qr(scan_id, png)
+                ScanSessionService(db).publish_qr(scan_id, png, qr_crop_png)
 
         def on_confirming(_confirmed: bool) -> None:
             with session_scope(self.engine) as db:
@@ -92,8 +116,12 @@ class AuthWorker:
 
         scanned = None
         storage_state = None
+        scan_started = time.monotonic()
         try:
-            scanned = await self.scanner.run(
+            runner = getattr(self.scanner, "run_prepared", None)
+            if not callable(runner):
+                runner = self.scanner.run
+            scanned = await runner(
                 on_qr,
                 on_confirming,
                 cancelled,
@@ -130,6 +158,12 @@ class AuthWorker:
                     or completed.account_id != account.id
                 ):
                     raise Conflict("transition_conflict")
+                schedule_recent_safe_failures(db, account.id)
+            logger.info(
+                "auth scan succeeded session_id=%s duration_ms=%d",
+                scan_id,
+                round((time.monotonic() - scan_started) * 1000),
+            )
             return True
         except tuple(ERROR_CODES) as error:
             code = ERROR_CODES[type(error)]
@@ -174,14 +208,28 @@ async def run_loop() -> None:
             loop.add_signal_handler(signum, stopping.set)
         except NotImplementedError:
             pass
-    while not stopping.is_set():
-        await worker.run_once(stopping)
-        try:
-            await asyncio.wait_for(
-                stopping.wait(), timeout=settings.worker_poll_seconds
-            )
-        except TimeoutError:
-            continue
+    try:
+        while not stopping.is_set():
+            try:
+                await worker.prepare_scanner()
+            except Exception:
+                logger.exception("auth warm slot preparation failed")
+                try:
+                    await asyncio.wait_for(stopping.wait(), timeout=5)
+                except TimeoutError:
+                    continue
+                if stopping.is_set():
+                    break
+            if await worker.run_once(stopping):
+                continue
+            try:
+                await asyncio.wait_for(
+                    stopping.wait(), timeout=settings.auth_poll_seconds
+                )
+            except TimeoutError:
+                continue
+    finally:
+        await worker.close()
 
 
 if __name__ == "__main__":

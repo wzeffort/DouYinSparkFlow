@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import threading
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from pathlib import Path
@@ -17,13 +18,16 @@ from sqlalchemy.engine import Engine
 
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
+from spark_console.pii import PiiCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     DouyinAccount,
     DouyinContactIdentity,
     DouyinConversation,
+    NotificationEvent,
     SparkTask,
     SparkTaskTargetIdentity,
+    TaskQuotaGrant,
     TaskRun,
     User,
     WorkerLock,
@@ -34,10 +38,14 @@ from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.tasks import TaskService
+from spark_console.services.task_capacity import TaskCapacityService
+from spark_console.services.platform_status import build_platform_status
+from spark_console.services.system_health import load_health_snapshot
 from spark_console.services.users import UserService
 from spark_console.web.account_scan_routes import build_account_scan_router
 from spark_console.web.auth import WebAuth
 from spark_console.web.registration_routes import admin_invite_items, build_registration_router
+from spark_console.web.email_routes import build_email_router
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -90,9 +98,17 @@ ADMIN_NOTICES = {
     "task_updated": "任务已保存，下一次执行时间已重新计算",
     "task_toggled": "任务状态已更新",
     "task_deleted": "任务已删除",
-    "retry_scheduled": "已安排 1 分钟后安全重试",
+    "retry_scheduled": "已安排到最近空闲时段安全重试",
     "retry_already_scheduled": "该失败记录已经安排过重试",
     "retry_not_allowed": "该记录可能已提交发送，不能快捷重试",
+    "task_limit_updated": "用户任务上限已更新",
+    "task_limit_invalid": "任务上限须为 1–100",
+    "task_slot_full": "该任务时间不满足四分钟安全间隔，请先编辑发送时间",
+    "quota_policy_updated": "新用户默认额度策略已更新",
+    "quota_granted": "额度已添加",
+    "quota_updated": "额度数量和有效期已更新",
+    "quota_revoked": "额度已撤销，超额任务已自动暂停",
+    "quota_invalid": "额度设置无效，请检查数量和时间范围",
 }
 
 
@@ -130,9 +146,40 @@ def shanghai_time(value) -> str:
     return aware.astimezone(ZoneInfo("Asia/Shanghai")).strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _parse_shanghai_datetime(value: str, *, required: bool) -> datetime | None:
+    clean = value.strip()
+    if not clean:
+        if required:
+            raise ValidationError("请选择额度开始时间")
+        return None
+    try:
+        parsed = datetime.fromisoformat(clean)
+    except ValueError:
+        raise ValidationError("额度时间格式无效") from None
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Shanghai"))
+    return parsed.astimezone(timezone.utc)
+
+
 templates.env.filters["shanghai_time"] = shanghai_time
+templates.env.filters["datetime_local"] = lambda value: (
+    ""
+    if value is None
+    else _aware_utc(value)
+    .astimezone(ZoneInfo("Asia/Shanghai"))
+    .strftime("%Y-%m-%dT%H:%M")
+)
 templates.env.filters["run_status"] = lambda value: RUN_STATUS_LABELS.get(value, value)
 templates.env.filters["run_stage"] = lambda value: RUN_STAGE_LABELS.get(value, value)
+templates.env.filters["filesize"] = lambda value: (
+    "—"
+    if value is None
+    else (
+        f"{float(value) / 1024**3:.1f} GiB"
+        if float(value) >= 1024**3
+        else f"{float(value) / 1024**2:.1f} MiB"
+    )
+)
 
 
 def create_app(settings: Settings, engine: Engine) -> FastAPI:
@@ -145,8 +192,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     auth = WebAuth(sessions)
     registration_limiter = FailedAttemptLimiter()
     cipher = CookieCipher(settings.cookie_key_file.read_bytes())
+    pii = (
+        PiiCipher(settings.pii_key_file.read_bytes())
+        if settings.email_enabled and settings.pii_key_file is not None
+        else None
+    )
+    task_write_lock = threading.Lock()
 
     def page(request: Request, name: str, status_code: int = 200, **context):
+        context.setdefault("email_enabled", settings.email_enabled)
         return templates.TemplateResponse(
             request=request, name=name, context=context, status_code=status_code
         )
@@ -175,7 +229,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     def admin_dashboard_context(request: Request, db):
         now = datetime.now(timezone.utc)
-        users = db.scalars(select(User).order_by(User.created_at)).all()
+        capacity = TaskCapacityService(db, AuditService(db))
+        capacity.reconcile_all(now)
         task_query = (
             select(SparkTask, User)
             .join(User, SparkTask.owner_user_id == User.id)
@@ -222,12 +277,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 .limit(20)
             ).all()
         )
-        retryable_run_ids = set()
-        latest_run_by_task = {}
         failures_by_task = {}
         closed_failure_streaks = set()
         for run, task, _owner in runs:
-            latest_run_by_task.setdefault(task.id, run.id)
             if task.id in closed_failure_streaks:
                 continue
             if run.status == "failed":
@@ -235,15 +287,6 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             else:
                 failures_by_task.setdefault(task.id, 0)
                 closed_failure_streaks.add(task.id)
-        for run, task, _owner in runs:
-            if (
-                run.status == "failed"
-                and run.error_code in SAFE_MANUAL_RETRY_CODES
-                and task.enabled
-                and latest_run_by_task.get(task.id) == run.id
-            ):
-                retryable_run_ids.add(run.id)
-
         lock = db.get(WorkerLock, 1)
         worker_online = bool(
             lock and _aware_utc(lock.lease_until) and _aware_utc(lock.lease_until) > now
@@ -256,15 +299,22 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         repeated_failure_tasks = sum(
             1 for count in failures_by_task.values() if count >= 3
         )
+        email_status_counts = {
+            status: count
+            for status, count in db.execute(
+                select(NotificationEvent.status, func.count(NotificationEvent.id)).group_by(
+                    NotificationEvent.status
+                )
+            ).all()
+        }
         query_values = admin_query(request)
         query_suffix = f"?{urlencode(query_values)}" if query_values else ""
         notice = request.query_params.get("notice", "")
         return {
-            "users": users,
+            "quota_policy": capacity.policy(),
             "tasks": tasks,
-            "runs": runs,
             "invites": invites,
-            "users_total": len(users),
+            "users_total": db.scalar(select(func.count(User.id))) or 0,
             "tasks_total": db.scalar(select(func.count(SparkTask.id))) or 0,
             "runs_total": db.scalar(select(func.count(TaskRun.id))) or 0,
             "task_page": task_page,
@@ -278,17 +328,41 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             "worker_id": lock.worker_id if worker_online else None,
             "invalid_accounts": invalid_accounts,
             "repeated_failure_tasks": repeated_failure_tasks,
-            "retryable_run_ids": retryable_run_ids,
+            "email_status_counts": email_status_counts,
             "updated_at": now,
             "notice_message": ADMIN_NOTICES.get(notice),
         }
 
+    def admin_users_context(request: Request, db):
+        now = datetime.now(timezone.utc)
+        capacity = TaskCapacityService(db, AuditService(db))
+        capacity.reconcile_all(now)
+        query = request.query_params.get("q", "").strip()[:80]
+        statement = select(User).order_by(User.created_at, User.username)
+        if query:
+            statement = statement.where(func.lower(User.username).like(f"%{query.lower()}%"))
+        rows = list(db.scalars(statement).all())
+        users, user_page = _page_info(
+            rows, _positive_page(request.query_params.get("page")), 8
+        )
+        summaries = {item.id: capacity.summary_for(item, now) for item in users}
+        return {
+            "users": users,
+            "user_page": user_page,
+            "user_q": query,
+            "user_quota_summaries": summaries,
+            "notice_message": ADMIN_NOTICES.get(request.query_params.get("notice", "")),
+        }
+
     app.include_router(
         build_registration_router(
-            engine, passwords, registration_limiter, auth, page, cipher
+            engine, passwords, registration_limiter, auth, page, cipher,
+            pii, settings.email_enabled,
         )
     )
     app.include_router(build_account_scan_router(engine, auth, cipher))
+    if pii is not None:
+        app.include_router(build_email_router(engine, auth, passwords, pii, page))
 
     @app.exception_handler(401)
     async def unauthorized(request: Request, _exc):
@@ -316,7 +390,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.get("/login")
     def login_page(request: Request):
-        return page(request, "login.html", title="登录", nav=False)
+        return page(
+            request, "login.html", title="登录", nav=False,
+            password_reset=request.query_params.get("password_reset") == "1",
+        )
 
     @app.post("/login")
     def login(request: Request, username: str = Form(), password: str = Form()):
@@ -429,10 +506,36 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def dashboard(request: Request):
         with session_scope(engine) as db:
             user, _record, context = auth.user_context(request, db)
+            TaskCapacityService(db, AuditService(db)).reconcile_all()
             tasks = db.scalars(select(SparkTask).where(SparkTask.owner_user_id == user.id)).all()
             accounts = db.scalars(select(DouyinAccount).where(DouyinAccount.owner_user_id == user.id)).all()
             runs = db.scalars(select(TaskRun).join(SparkTask).where(SparkTask.owner_user_id == user.id).order_by(TaskRun.scheduled_for.desc()).limit(5)).all()
-            return page(request, "dashboard.html", title="今日续火", tasks=tasks, accounts=accounts, runs=runs, **context)
+            return page(
+                request,
+                "dashboard.html",
+                title="今日续火",
+                tasks=tasks,
+                accounts=accounts,
+                runs=runs,
+                platform_status=build_platform_status(db),
+                **context,
+            )
+
+    @app.get("/api/platform-status")
+    def platform_status_api(request: Request):
+        with session_scope(engine) as db:
+            auth.current(request, db)
+            TaskCapacityService(db, AuditService(db)).reconcile_all()
+            status = build_platform_status(db)
+            return {
+                "total": status.total,
+                "success": status.success,
+                "running": status.running,
+                "pending": status.pending,
+                "failed": status.failed,
+                "worker_online": status.worker_online,
+                "updated_at": status.updated_at.isoformat(),
+            }
 
     @app.get("/accounts")
     def accounts_page(request: Request):
@@ -502,7 +605,48 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record, context = auth.user_context(request, db)
             task_service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
             accounts = AccountService(db, cipher, AuditService(db)).list_owned(user.id)
-            return page(request, "tasks.html", title="续火任务", tasks=task_service.list_owned(user.id), accounts=accounts, **context)
+            capacity = TaskCapacityService(db, AuditService(db))
+            capacity.reconcile_user(user.id)
+            quota_summary = capacity.summary_for(user)
+            return page(
+                request,
+                "tasks.html",
+                title="续火任务",
+                tasks=task_service.list_owned(user.id),
+                accounts=accounts,
+                task_usage=quota_summary["active_usage"],
+                task_limit=quota_summary["limit"],
+                quota_summary=quota_summary,
+                task_error=None,
+                **context,
+            )
+
+    @app.get("/tasks/availability")
+    def task_availability(
+        request: Request,
+        send_time: str,
+        exclude_task_id: str = "",
+    ):
+        with task_write_lock, session_scope(engine) as db:
+            user, _record = auth.current(request, db)
+            excluded = exclude_task_id.strip() or None
+            if excluded:
+                task = db.get(SparkTask, excluded)
+                if task is None or (
+                    user.role != "admin" and task.owner_user_id != user.id
+                ):
+                    raise HTTPException(404)
+            try:
+                availability = TaskCapacityService(
+                    db, AuditService(db)
+                ).availability(send_time, excluded)
+            except ValidationError as error:
+                raise HTTPException(400, detail=str(error)) from error
+            return {
+                "available": availability.available,
+                "remaining": availability.remaining,
+                "suggestions": list(availability.suggestions),
+            }
 
     @app.post("/tasks")
     def add_task(
@@ -512,18 +656,38 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         target_sec_uid: str = Form(default=""),
         send_time: str = Form(), message_template: str = Form(),
     ):
-        with session_scope(engine) as db:
-            user, record = auth.current(request, db)
+        with task_write_lock, session_scope(engine) as db:
+            user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
             service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
-            service.create(
-                user.id,
-                account_id,
-                target_name,
-                send_time,
-                message_template,
-                target_sec_uid=target_sec_uid,
-            )
+            try:
+                service.create(
+                    user.id,
+                    account_id,
+                    target_name,
+                    send_time,
+                    message_template,
+                    target_sec_uid=target_sec_uid,
+                )
+            except (ValidationError, Conflict) as error:
+                account_service = AccountService(
+                    db, cipher, AuditService(db)
+                )
+                capacity = TaskCapacityService(db, AuditService(db))
+                quota_summary = capacity.summary_for(user)
+                return page(
+                    request,
+                    "tasks.html",
+                    status_code=400,
+                    title="续火任务",
+                    tasks=service.list_owned(user.id),
+                    accounts=account_service.list_owned(user.id),
+                    task_usage=quota_summary["active_usage"],
+                    task_limit=quota_summary["limit"],
+                    quota_summary=quota_summary,
+                    task_error=str(error),
+                    **context,
+                )
         return RedirectResponse("/tasks", status_code=303)
 
     @app.get("/tasks/{task_id}/edit")
@@ -566,7 +730,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         send_time: str = Form(),
         message_template: str = Form(),
     ):
-        with session_scope(engine) as db:
+        with task_write_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
             account_service = AccountService(db, cipher, AuditService(db))
@@ -607,12 +771,22 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.post("/tasks/{task_id}/toggle")
     def toggle_task(request: Request, task_id: str, csrf_token: str = Form(default="")):
-        with session_scope(engine) as db:
-            user, record = auth.current(request, db)
+        with task_write_lock, session_scope(engine) as db:
+            user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
             service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
             task = service.get_owned(user.id, task_id)
-            service.set_enabled_owned(user.id, task_id, not task.enabled)
+            try:
+                service.set_enabled_owned(user.id, task_id, not task.enabled)
+            except ValidationError as error:
+                return page(
+                    request,
+                    "error.html",
+                    status_code=400,
+                    title="任务未启用",
+                    message=str(error),
+                    **context,
+                )
         return RedirectResponse("/tasks", status_code=303)
 
     @app.post("/tasks/{task_id}/delete")
@@ -627,8 +801,43 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def runs_page(request: Request):
         with session_scope(engine) as db:
             user, _record, context = auth.user_context(request, db)
-            runs = db.execute(select(TaskRun, SparkTask).join(SparkTask).where(SparkTask.owner_user_id == user.id).order_by(TaskRun.scheduled_for.desc()).limit(100)).all()
-            return page(request, "runs.html", title="执行记录", runs=runs, **context)
+            show_run_owner = user.role == "admin"
+            run_query = (
+                select(TaskRun, SparkTask, User, DouyinAccount)
+                .join(SparkTask, TaskRun.task_id == SparkTask.id)
+                .join(User, SparkTask.owner_user_id == User.id)
+                .outerjoin(DouyinAccount, SparkTask.douyin_account_id == DouyinAccount.id)
+            )
+            count_query = select(func.count(TaskRun.id)).join(SparkTask)
+            if not show_run_owner:
+                run_query = run_query.where(SparkTask.owner_user_id == user.id)
+                count_query = count_query.where(SparkTask.owner_user_id == user.id)
+
+            total = db.scalar(count_query) or 0
+            requested_page = _positive_page(request.query_params.get("page"))
+            pages = max(1, ceil(total / 6))
+            current_page = min(requested_page, pages)
+            runs = db.execute(
+                run_query.order_by(TaskRun.scheduled_for.desc())
+                .offset((current_page - 1) * 6)
+                .limit(6)
+            ).all()
+            run_page = {
+                "page": current_page,
+                "pages": pages,
+                "total": total,
+                "has_previous": current_page > 1,
+                "has_next": current_page < pages,
+            }
+            return page(
+                request,
+                "runs.html",
+                title="执行记录",
+                runs=runs,
+                run_page=run_page,
+                show_run_owner=show_run_owner,
+                **context,
+            )
 
     @app.get("/admin")
     def admin_page(request: Request):
@@ -642,6 +851,54 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 **context,
             )
 
+    @app.get("/admin/users")
+    def admin_users_page(request: Request):
+        with session_scope(engine) as db:
+            _admin, _record, context = auth.admin_context(request, db)
+            return page(
+                request,
+                "admin_users.html",
+                title="用户管理",
+                **admin_users_context(request, db),
+                **context,
+            )
+
+    @app.get("/admin/health")
+    def admin_health_page(request: Request):
+        with session_scope(engine) as db:
+            _admin, _record, context = auth.admin_context(request, db)
+            now = datetime.now(timezone.utc)
+            snapshot = load_health_snapshot(
+                settings.health_snapshot_path
+                or settings.data_dir / "host-health.json",
+                now,
+            )
+            return page(
+                request,
+                "admin_health.html",
+                title="系统健康",
+                health=snapshot,
+                platform_status=build_platform_status(db, now=now),
+                invalid_accounts=(
+                    db.scalar(
+                        select(func.count(DouyinAccount.id)).where(
+                            DouyinAccount.validation_state == "invalid"
+                        )
+                    )
+                    or 0
+                ),
+                email_failed=(
+                    db.scalar(
+                        select(func.count(NotificationEvent.id)).where(
+                            NotificationEvent.status == "failed"
+                        )
+                    )
+                    or 0
+                ),
+                updated_at=now,
+                **context,
+            )
+
     @app.post("/admin/users")
     def admin_create_user(request: Request, csrf_token: str = Form(default=""), username: str = Form()):
         with session_scope(engine) as db:
@@ -651,10 +908,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             _user, temporary = service.create(username)
             return page(
                 request,
-                "admin.html",
-                title="管理后台",
+                "admin_users.html",
+                title="用户管理",
                 one_time_password=temporary,
-                **admin_dashboard_context(request, db),
+                **admin_users_context(request, db),
                 **context,
             )
 
@@ -667,7 +924,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             if user is None:
                 raise HTTPException(404)
             UserService(db, passwords, AuditService(db)).set_disabled(admin.id, user.id, user.status == "active")
-        return RedirectResponse(admin_url(request), status_code=303)
+        return RedirectResponse("/admin/users", status_code=303)
 
     @app.post("/admin/users/{user_id}/delete")
     def admin_delete_user(request: Request, user_id: str, csrf_token: str = Form(default=""), confirmation: str = Form()):
@@ -675,19 +932,190 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             UserService(db, passwords, AuditService(db)).delete(admin.id, user_id, confirmation)
-        return RedirectResponse(admin_url(request), status_code=303)
+        return RedirectResponse("/admin/users", status_code=303)
+
+    @app.post("/admin/quota-policy")
+    def admin_update_quota_policy(
+        request: Request,
+        csrf_token: str = Form(default=""),
+        default_amount: str = Form(default=""),
+        default_duration_days: str = Form(default=""),
+        max_saved_tasks: str = Form(default=""),
+    ):
+        notice = "quota_invalid"
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                duration = (
+                    int(default_duration_days)
+                    if default_duration_days.strip()
+                    else None
+                )
+                TaskCapacityService(db, AuditService(db)).update_policy(
+                    admin.id,
+                    int(default_amount),
+                    duration,
+                    int(max_saved_tasks),
+                )
+                notice = "quota_policy_updated"
+            except (ValueError, ValidationError):
+                pass
+        return RedirectResponse(admin_url(request, notice), status_code=303)
+
+    @app.get("/admin/users/{user_id}/quota")
+    def admin_user_quota_page(request: Request, user_id: str):
+        with session_scope(engine) as db:
+            _admin, _record, context = auth.admin_context(request, db)
+            target = db.get(User, user_id)
+            if target is None or target.role == "admin":
+                raise HTTPException(404)
+            capacity = TaskCapacityService(db, AuditService(db))
+            capacity.reconcile_user(target.id)
+            notice = request.query_params.get("notice", "")
+            return page(
+                request,
+                "quota_admin.html",
+                title=f"{target.username} 的任务额度",
+                target=target,
+                quota_summary=capacity.summary_for(target),
+                notice_message=ADMIN_NOTICES.get(notice),
+                now_local=datetime.now(ZoneInfo("Asia/Shanghai")).strftime(
+                    "%Y-%m-%dT%H:%M"
+                ),
+                **context,
+            )
+
+    @app.post("/admin/users/{user_id}/quota-grants")
+    def admin_add_quota_grant(
+        request: Request,
+        user_id: str,
+        csrf_token: str = Form(default=""),
+        amount: str = Form(default=""),
+        starts_at: str = Form(default=""),
+        expires_at: str = Form(default=""),
+        label: str = Form(default=""),
+    ):
+        notice = "quota_invalid"
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                TaskCapacityService(db, AuditService(db)).grant(
+                    admin.id,
+                    user_id,
+                    int(amount),
+                    _parse_shanghai_datetime(starts_at, required=True),
+                    _parse_shanghai_datetime(expires_at, required=False),
+                    label,
+                )
+                notice = "quota_granted"
+            except (ValueError, ValidationError, NotFound):
+                pass
+        return RedirectResponse(
+            f"/admin/users/{user_id}/quota?notice={notice}", status_code=303
+        )
+
+    @app.post("/admin/quota-grants/{grant_id}/edit")
+    def admin_edit_quota_grant(
+        request: Request,
+        grant_id: str,
+        csrf_token: str = Form(default=""),
+        amount: str = Form(default=""),
+        starts_at: str = Form(default=""),
+        expires_at: str = Form(default=""),
+        label: str = Form(default=""),
+    ):
+        notice = "quota_invalid"
+        user_id = ""
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            grant = db.get(TaskQuotaGrant, grant_id)
+            if grant is None:
+                raise HTTPException(404)
+            user_id = grant.user_id
+            try:
+                TaskCapacityService(db, AuditService(db)).update_grant(
+                    admin.id,
+                    grant_id,
+                    int(amount),
+                    _parse_shanghai_datetime(starts_at, required=True),
+                    _parse_shanghai_datetime(expires_at, required=False),
+                    label,
+                )
+                notice = "quota_updated"
+            except (ValueError, ValidationError):
+                pass
+        return RedirectResponse(
+            f"/admin/users/{user_id}/quota?notice={notice}", status_code=303
+        )
+
+    @app.post("/admin/quota-grants/{grant_id}/revoke")
+    def admin_revoke_quota_grant(
+        request: Request,
+        grant_id: str,
+        csrf_token: str = Form(default=""),
+    ):
+        notice = "quota_invalid"
+        user_id = ""
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            grant = db.get(TaskQuotaGrant, grant_id)
+            if grant is None:
+                raise HTTPException(404)
+            user_id = grant.user_id
+            try:
+                TaskCapacityService(db, AuditService(db)).revoke(
+                    admin.id, grant_id
+                )
+                notice = "quota_revoked"
+            except ValidationError:
+                pass
+        return RedirectResponse(
+            f"/admin/users/{user_id}/quota?notice={notice}", status_code=303
+        )
+
+    @app.post("/admin/users/{user_id}/task-limit")
+    def admin_set_task_limit(
+        request: Request,
+        user_id: str,
+        csrf_token: str = Form(default=""),
+        task_limit: str = Form(default=""),
+    ):
+        notice = "task_limit_invalid"
+        with session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                parsed = int(task_limit)
+                TaskCapacityService(db, AuditService(db)).set_limit(
+                    admin.id, user_id, parsed
+                )
+                notice = "task_limit_updated"
+            except (ValueError, ValidationError):
+                pass
+        return RedirectResponse(admin_url(request, notice), status_code=303)
 
     @app.post("/admin/tasks/{task_id}/toggle")
     def admin_toggle_task(request: Request, task_id: str, csrf_token: str = Form(default="")):
-        with session_scope(engine) as db:
-            _admin, record, _context = auth.admin_context(request, db)
+        notice = "task_toggled"
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             task = db.get(SparkTask, task_id)
             if task is None:
                 raise HTTPException(404)
-            task.enabled = not task.enabled
-            AuditService(db).write(_admin.id, "task.enabled" if task.enabled else "task.disabled", "spark_task", task.id)
-        return RedirectResponse(admin_url(request, "task_toggled"), status_code=303)
+            try:
+                TaskService(
+                    db,
+                    AccountService(db, cipher, AuditService(db)),
+                    AuditService(db),
+                ).set_enabled(task, not task.enabled, admin.id)
+            except ValidationError:
+                notice = "task_slot_full"
+        return RedirectResponse(admin_url(request, notice), status_code=303)
 
     @app.post("/admin/tasks/{task_id}/delete")
     def admin_delete_task(request: Request, task_id: str, csrf_token: str = Form(default="")):
@@ -769,7 +1197,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         send_time: str = Form(),
         message_template: str = Form(),
     ):
-        with session_scope(engine) as db:
+        with task_write_lock, session_scope(engine) as db:
             admin, record, context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             task = db.get(SparkTask, task_id)
@@ -819,7 +1247,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     ):
         now = datetime.now(timezone.utc)
         notice = "retry_not_allowed"
-        with session_scope(engine) as db:
+        with task_write_lock, session_scope(engine) as db:
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             run = db.get(TaskRun, run_id)
@@ -850,7 +1278,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 if already_scheduled:
                     notice = "retry_already_scheduled"
                 else:
-                    task.next_run_at = now + timedelta(minutes=1)
+                    task.next_run_at = TaskCapacityService(
+                        db, AuditService(db)
+                    ).next_available_run_at(now + timedelta(minutes=1), task.id)
                     AuditService(db).write(
                         admin.id,
                         "task.manual_retry_scheduled",
