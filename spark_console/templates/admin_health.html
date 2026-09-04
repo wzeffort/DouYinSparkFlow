@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head health-page-head">
+  <div><span class="eyebrow">SYSTEM PULSE</span><h1>系统健康</h1><p>查看服务器容量、网络流量和续火业务状态；数据每分钟采集一次。</p></div>
+  <div class="health-refresh"><a class="button quiet" href="/admin/health">刷新数据</a><small>页面更新于 {{ updated_at|shanghai_time }}</small></div>
+</header>
+
+<section class="health-pulse" aria-label="健康脉冲">
+  <article class="pulse-segment {{ 'healthy' if health.available and not health.stale else 'critical' }}"><span>网站访问</span><strong>{{ '正常' if health.available and not health.stale else '待检查' }}</strong></article>
+  <article class="pulse-segment {{ 'healthy' if platform_status.worker_online else 'critical' }}"><span>任务执行器</span><strong>{{ '在线' if platform_status.worker_online else '离线' }}</strong></article>
+  <article class="pulse-segment {{ 'healthy' if not invalid_accounts else 'warning' }}"><span>抖音账号</span><strong>{{ '正常' if not invalid_accounts else invalid_accounts ~ ' 个失效' }}</strong></article>
+  <article class="pulse-segment {{ health.overall }}"><span>服务器资源</span><strong>{{ '正常' if health.overall == 'healthy' else ('需关注' if health.overall in ['notice', 'warning'] else '异常') }}</strong></article>
+  <article class="pulse-segment {{ 'healthy' if not email_failed else 'warning' }}"><span>邮件通知</span><strong>{{ '正常' if not email_failed else email_failed ~ ' 个失败' }}</strong></article>
+</section>
+
+{% if not health.available or health.stale %}<div class="notice health-stale-notice"><strong>{{ health.message }}</strong><span>页面仍显示最后一次安全快照，不会把旧数据标记为实时状态。</span></div>{% endif %}
+
+{% if health.available %}
+<section class="health-resource-grid">
+  <article class="health-metric-card"><div><span>CPU</span><strong>{{ health.resources.cpu_percent }}%</strong></div><meter min="0" max="100" value="{{ health.resources.cpu_percent }}">{{ health.resources.cpu_percent }}%</meter><small>当前主机占用</small></article>
+  <article class="health-metric-card"><div><span>内存</span><strong>{{ health.resources.memory_percent }}%</strong></div><meter min="0" max="100" value="{{ health.resources.memory_percent }}">{{ health.resources.memory_percent }}%</meter><small>持续超过 85% 会告警</small></article>
+  <article class="health-metric-card {{ health.resources.disk_severity }}"><div><span>磁盘</span><strong>{{ health.resources.disk_percent }}%</strong></div><meter min="0" max="100" value="{{ health.resources.disk_percent }}">{{ health.resources.disk_percent }}%</meter><small>剩余 {{ health.resources.disk_free_bytes|filesize }}</small></article>
+</section>
+
+<div class="health-detail-grid">
+  <section class="panel health-traffic-panel">
+    <div class="section-head"><div><span class="section-kicker">NETWORK</span><h2>公网流量</h2><p>主机网卡统计，不等同于阿里云最终账单。</p></div></div>
+    <div class="traffic-now"><article><span>当前下载</span><strong>{{ health.traffic.rx_rate_bps|filesize }}/s</strong></article><article><span>当前上传</span><strong>{{ health.traffic.tx_rate_bps|filesize }}/s</strong></article></div>
+    <div class="traffic-periods"><article><span>今日接收</span><strong>{{ health.traffic.today_rx_bytes|filesize }}</strong></article><article><span>今日发送</span><strong>{{ health.traffic.today_tx_bytes|filesize }}</strong></article><article><span>本月接收</span><strong>{{ health.traffic.month_rx_bytes|filesize }}</strong></article><article><span>本月发送</span><strong>{{ health.traffic.month_tx_bytes|filesize }}</strong></article></div>
+  </section>
+  <section class="panel health-services-panel">
+    <div class="section-head"><div><span class="section-kicker">SERVICES</span><h2>服务矩阵</h2><p>只展示固定白名单服务，不开放服务器操作。</p></div></div>
+    <div class="service-health-list">{% for name, state in health.services.items() %}<article><span class="signal-dot {{ 'online' if state in ['running', 'healthy'] else 'offline' }}"></span><strong>{{ name }}</strong><span>{{ '运行中' if state in ['running', 'healthy'] else state }}</span></article>{% else %}<p class="muted">暂无服务采集数据</p>{% endfor %}</div>
+  </section>
+</div>
+
+<section class="panel health-business-panel">
+  <div class="section-head"><div><span class="section-kicker">BUSINESS</span><h2>续火业务健康</h2><p>只展示聚合数量，不显示用户、好友或消息内容。</p></div></div>
+  <div class="health-business-stats"><article><span>今日成功</span><strong>{{ platform_status.success }}/{{ platform_status.total }}</strong></article><article><span>正在执行</span><strong>{{ platform_status.running }}</strong></article><article><span>待执行</span><strong>{{ platform_status.pending }}</strong></article><article><span>失败 / 跳过</span><strong>{{ platform_status.failed }}</strong></article></div>
+</section>
+{% else %}
+<section class="panel empty"><span>◷</span><h2>等待第一份主机健康快照</h2><p>采集器启动后，资源和流量数据会在一分钟内出现。</p></section>
+{% endif %}
+{% endblock %}

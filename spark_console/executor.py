@@ -9,6 +9,8 @@ from core.web_chat import (
     WEB_CHAT_URL,
     TargetNotFoundError,
     UserInfoCollector,
+    WebChatLoginRequiredError,
+    page_has_web_chat_login_prompt,
     select_web_chat_target,
 )
 from spark_console.credentials import CredentialError, CredentialPayload
@@ -65,19 +67,36 @@ class DouyinExecutor:
                     if target_sec_uid:
                         page.on("response", user_info.capture)
                     await page.goto(WEB_CHAT_URL, wait_until="domcontentloaded", timeout=120000)
+                    if await page_has_web_chat_login_prompt(page):
+                        raise WebChatLoginRequiredError("Douyin login is required")
                     stage = ExecutionStage.SELECTING_TARGET
                     identity = (
                         await user_info.wait_for(target_sec_uid)
                         if target_sec_uid
                         else None
                     )
-                    await select_web_chat_target(
-                        page,
-                        target,
-                        timeout=45000,
-                        aliases=identity.aliases if identity else (),
-                    )
-                    await page.wait_for_selector(CHAT_EDITOR_SELECTOR, timeout=30000)
+                    for attempt in range(2):
+                        try:
+                            await select_web_chat_target(
+                                page,
+                                target,
+                                timeout=45000 if attempt == 0 else 15000,
+                                aliases=identity.aliases if identity else (),
+                            )
+                            await page.wait_for_selector(
+                                CHAT_EDITOR_SELECTOR,
+                                timeout=15000 if attempt == 0 else 30000,
+                            )
+                            break
+                        except TargetNotFoundError:
+                            raise
+                        except Exception as error:
+                            if await page_has_web_chat_login_prompt(page):
+                                raise WebChatLoginRequiredError(
+                                    "Douyin login is required"
+                                ) from error
+                            if attempt == 1:
+                                raise
                     stage = ExecutionStage.SENDING
                     editor = page.locator(CHAT_EDITOR_SELECTOR).first
                     lines = message.splitlines() or [message]
@@ -104,6 +123,13 @@ class DouyinExecutor:
                             await context.close()
                     finally:
                         await browser.close()
+        except WebChatLoginRequiredError:
+            return ExecutionResult(
+                False,
+                ExecutionStage.AUTHENTICATING,
+                "login_expired",
+                "抖音账号信息已过期，请重新登录后再试",
+            )
         except TargetNotFoundError:
             return ExecutionResult(False, ExecutionStage.SELECTING_TARGET, "target_not_found", "未找到完全匹配的目标好友")
         except CredentialError:

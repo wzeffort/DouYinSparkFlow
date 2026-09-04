@@ -453,6 +453,40 @@ class _FakeConversationNotOpenedPage(_FakePage):
         raise TimeoutError("chat editor never appeared")
 
 
+class _FakeRecoveringConversationPage(_FakeSendingPage):
+    def __init__(self):
+        super().__init__()
+        self.editor_waits = 0
+
+    async def wait_for_selector(self, *_args, **_kwargs):
+        self.editor_waits += 1
+        if self.editor_waits == 1:
+            raise TimeoutError("chat editor was delayed after the first click")
+        return None
+
+
+class _FakeLoginPrompt:
+    async def count(self):
+        return 1
+
+    async def is_visible(self):
+        return True
+
+
+class _FakeExpiredLoginPage(_FakeConversationNotOpenedPage):
+    def locator(self, selector):
+        if selector == "text=扫码登录":
+            return _FakeLoginPrompt()
+        return type(
+            "MissingLocator",
+            (),
+            {
+                "count": staticmethod(lambda: asyncio.sleep(0, result=0)),
+                "is_visible": staticmethod(lambda: asyncio.sleep(0, result=False)),
+            },
+        )()
+
+
 class _FakeIdentityPage(_FakeSendingPage):
     def __init__(self):
         super().__init__()
@@ -684,6 +718,82 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("conversation_not_opened", result.error_code)
         self.assertEqual("已找到好友，但聊天窗口没有打开", result.error_summary)
         self.assertTrue(result.retryable)
+
+    async def test_executor_reselects_target_when_chat_editor_misses_first_click(self):
+        page = _FakeRecoveringConversationPage()
+        browser = _FakeBrowser()
+
+        async def new_page():
+            return page
+
+        browser.context.new_page = new_page
+        async_api = ModuleType("playwright.async_api")
+        async_api.async_playwright = lambda: _FakePlaywrightManager(browser)
+        playwright = ModuleType("playwright")
+        playwright.async_api = async_api
+        core_tasks = ModuleType("core.tasks")
+
+        async def confirm_message_sent(*_args, **_kwargs):
+            return None
+
+        core_tasks.confirm_message_sent = confirm_message_sent
+        selection_attempts = 0
+
+        async def select_target(*_args, **_kwargs):
+            nonlocal selection_attempts
+            selection_attempts += 1
+            return "目标"
+
+        raw = b'[{"name":"sid","value":"reselect-marker","domain":".douyin.com","path":"/"}]'
+        with patch.dict(
+            "sys.modules",
+            {
+                "playwright": playwright,
+                "playwright.async_api": async_api,
+                "core.tasks": core_tasks,
+            },
+        ), patch("spark_console.executor.select_web_chat_target", select_target):
+            result = await DouyinExecutor().execute(raw, "目标", "消息")
+
+        self.assertTrue(result.success)
+        self.assertEqual(2, selection_attempts)
+        self.assertEqual(2, page.editor_waits)
+        self.assertEqual(["Enter"], page.editor.pressed)
+
+    async def test_executor_reports_expired_login_instead_of_conversation_timeout(self):
+        page = _FakeExpiredLoginPage()
+        browser = _FakeBrowser()
+
+        async def new_page():
+            return page
+
+        browser.context.new_page = new_page
+        async_api = ModuleType("playwright.async_api")
+        async_api.async_playwright = lambda: _FakePlaywrightManager(browser)
+        playwright = ModuleType("playwright")
+        playwright.async_api = async_api
+        core_tasks = ModuleType("core.tasks")
+        core_tasks.confirm_message_sent = lambda *_args, **_kwargs: None
+
+        async def select_target(*_args, **_kwargs):
+            return "目标"
+
+        raw = b'[{"name":"sid","value":"expired-marker","domain":".douyin.com","path":"/"}]'
+        with patch.dict(
+            "sys.modules",
+            {
+                "playwright": playwright,
+                "playwright.async_api": async_api,
+                "core.tasks": core_tasks,
+            },
+        ), patch("spark_console.executor.select_web_chat_target", select_target):
+            result = await DouyinExecutor().execute(raw, "目标", "消息")
+
+        self.assertFalse(result.success)
+        self.assertEqual("authenticating", result.stage)
+        self.assertEqual("login_expired", result.error_code)
+        self.assertEqual("抖音账号信息已过期，请重新登录后再试", result.error_summary)
+        self.assertFalse(result.retryable)
 
     async def test_executor_resolves_current_alias_from_stable_identity(self):
         page = _FakeIdentityPage()

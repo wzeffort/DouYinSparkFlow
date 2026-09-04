@@ -31,8 +31,11 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_cancel_failure_stays_visible_shows_fixed_error_and_allows_retry(self):
         self.run_scenario("active-cancel-failure")
 
-    def test_preloaded_scan_is_reused_when_binding_button_is_clicked(self):
-        self.run_scenario("preload-click")
+    def test_page_load_does_not_claim_global_scan_slot(self):
+        self.run_scenario("no-auto-preload")
+
+    def test_mobile_uses_qr_crop_then_switches_to_full_browser_view(self):
+        self.run_scenario("mobile-crop")
 
     def test_status_polling_refreshes_the_live_cloud_browser_view(self):
         self.run_scenario("qr-stays-cached")

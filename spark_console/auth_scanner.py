@@ -77,6 +77,18 @@ class ScannedAccount:
     contact_identities: tuple[DouyinUserIdentity, ...] = ()
 
 
+@dataclass
+class _PreparedScan:
+    context: object
+    page: object
+    qr: object
+    user_info: UserInfoCollector
+    full_png: bytes
+    crop_png: bytes
+    baseline_auth_cookies: frozenset
+    prepared_at: float
+
+
 def _default_playwright_factory():
     from playwright.async_api import async_playwright
 
@@ -87,6 +99,15 @@ async def _invoke(callback: Callable, *args) -> None:
     result = callback(*args)
     if inspect.isawaitable(result):
         await result
+
+
+async def _invoke_qr(callback: Callable, full_png: bytes, crop_png: bytes) -> None:
+    try:
+        inspect.signature(callback).bind(full_png, crop_png)
+    except (TypeError, ValueError):
+        await _invoke(callback, full_png)
+        return
+    await _invoke(callback, full_png, crop_png)
 
 
 class DouyinQrScanner:
@@ -102,6 +123,189 @@ class DouyinQrScanner:
         self.qr_timeout_seconds = qr_timeout_seconds
         self.login_timeout_seconds = login_timeout_seconds
         self.poll_interval_seconds = poll_interval_seconds
+        self._manager = None
+        self._browser = None
+        self._prepared: _PreparedScan | None = None
+
+    @property
+    def has_prepared(self) -> bool:
+        return self._prepared is not None
+
+    async def start(self) -> None:
+        if self._browser is not None:
+            return
+        manager = self.playwright_factory()
+        try:
+            playwright = await manager.__aenter__()
+            browser = await playwright.chromium.launch(headless=True)
+        except BaseException:
+            try:
+                await manager.__aexit__(None, None, None)
+            except BaseException:
+                pass
+            raise
+        self._manager = manager
+        self._browser = browser
+
+    async def ensure_prepared(
+        self,
+        *,
+        max_age_seconds: float = 120,
+        cancelled=None,
+        expires_at: datetime | None = None,
+    ) -> bool:
+        loop = asyncio.get_running_loop()
+        if self._prepared is not None:
+            age = loop.time() - self._prepared.prepared_at
+            if age < max(1, max_age_seconds):
+                return False
+            await self._discard_prepared()
+        await self.start()
+        context = None
+        deadline = self._deadline(expires_at)
+        prepare_cancelled = cancelled or (lambda: False)
+        try:
+            context = await self._await_stage(
+                self._browser.new_context(), prepare_cancelled, deadline
+            )
+            page = await self._await_stage(
+                context.new_page(), prepare_cancelled, deadline
+            )
+            user_info = UserInfoCollector()
+            page.on("response", user_info.capture)
+            await self._await_stage(
+                page.goto(CHAT_LOGIN_URL, wait_until="domcontentloaded", timeout=120_000),
+                prepare_cancelled,
+                deadline,
+            )
+            await self._await_stage(
+                self._open_chat_login(page, prepare_cancelled), prepare_cancelled, deadline
+            )
+            qr = await self._await_stage(
+                self._find_qr(page, prepare_cancelled), prepare_cancelled, deadline
+            )
+            full_png = await self._await_stage(
+                page.screenshot(type="png"), prepare_cancelled, deadline
+            )
+            crop_png = await self._await_stage(
+                qr.screenshot(type="png"), prepare_cancelled, deadline
+            )
+            if not all(
+                isinstance(image, bytes) and image.startswith(PNG_SIGNATURE)
+                for image in (full_png, crop_png)
+            ):
+                raise QrLoadFailed()
+            baseline = self._auth_cookie_fingerprint(
+                await self._await_stage(context.cookies(), prepare_cancelled, deadline)
+            )
+            self._prepared = _PreparedScan(
+                context,
+                page,
+                qr,
+                user_info,
+                full_png,
+                crop_png,
+                baseline,
+                loop.time(),
+            )
+            context = None
+            return True
+        finally:
+            if context is not None:
+                await context.close()
+
+    async def run_prepared(
+        self,
+        on_qr,
+        on_confirming,
+        cancelled,
+        *,
+        expires_at: datetime | None = None,
+        on_view=None,
+        next_interaction=None,
+    ) -> ScannedAccount:
+        if self._prepared is None:
+            await self.ensure_prepared(cancelled=cancelled, expires_at=expires_at)
+        prepared = self._prepared
+        self._prepared = None
+        if prepared is None:
+            raise QrLoadFailed()
+        deadline = self._deadline(expires_at)
+        try:
+            self._checkpoint(cancelled, deadline)
+            await self._await_stage(
+                _invoke_qr(on_qr, prepared.full_png, prepared.crop_png),
+                cancelled,
+                deadline,
+            )
+
+            async def default_view(png: bytes) -> None:
+                try:
+                    inspect.signature(on_qr).bind(png)
+                except (TypeError, ValueError):
+                    return
+                await _invoke(on_qr, png)
+
+            await self._await_stage(
+                self._wait_for_login(
+                    prepared.page,
+                    on_confirming,
+                    cancelled,
+                    context=prepared.context,
+                    qr=prepared.qr,
+                    baseline_auth_cookies=prepared.baseline_auth_cookies,
+                    on_view=on_view or default_view,
+                    next_interaction=next_interaction,
+                ),
+                cancelled,
+                deadline,
+            )
+            display_name = await self._await_stage(
+                self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
+                cancelled,
+                deadline,
+            ) or "抖音账号"
+            unique_id = await self._await_stage(
+                self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
+                cancelled,
+                deadline,
+            )
+            storage_state = await self._await_stage(
+                prepared.context.storage_state(), cancelled, deadline
+            )
+            conversation_names = await self._await_stage(
+                self._visible_conversation_names(prepared.page), cancelled, deadline
+            )
+            contact_identities = await self._await_stage(
+                prepared.user_info.drain(), cancelled, deadline
+            )
+            return ScannedAccount(
+                display_name,
+                unique_id,
+                storage_state,
+                conversation_names,
+                contact_identities,
+            )
+        finally:
+            await prepared.context.close()
+
+    async def _discard_prepared(self) -> None:
+        prepared = self._prepared
+        self._prepared = None
+        if prepared is not None:
+            await prepared.context.close()
+
+    async def close(self) -> None:
+        await self._discard_prepared()
+        browser, manager = self._browser, self._manager
+        self._browser = None
+        self._manager = None
+        try:
+            if browser is not None:
+                await browser.close()
+        finally:
+            if manager is not None:
+                await manager.__aexit__(None, None, None)
 
     async def run(
         self,
@@ -113,99 +317,22 @@ class DouyinQrScanner:
         on_view=None,
         next_interaction=None,
     ) -> ScannedAccount:
-        deadline = self._deadline(expires_at)
-        self._checkpoint(cancelled, deadline)
-        browser = None
-        context = None
-        async with self.playwright_factory() as playwright:
-            try:
-                browser = await self._await_stage(
-                    playwright.chromium.launch(headless=True),
-                    cancelled,
-                    deadline,
-                )
-                context = await self._await_stage(
-                    browser.new_context(), cancelled, deadline
-                )
-                page = await self._await_stage(
-                    context.new_page(), cancelled, deadline
-                )
-                user_info = UserInfoCollector()
-                page.on("response", user_info.capture)
-                await self._await_stage(
-                    page.goto(
-                        CHAT_LOGIN_URL,
-                        wait_until="domcontentloaded",
-                        timeout=120_000,
-                    ),
-                    cancelled,
-                    deadline,
-                )
-                await self._await_stage(
-                    self._open_chat_login(page, cancelled), cancelled, deadline
-                )
-                qr = await self._await_stage(
-                    self._find_qr(page, cancelled), cancelled, deadline
-                )
-                png = await self._await_stage(
-                    page.screenshot(type="png"), cancelled, deadline
-                )
-                if not isinstance(png, bytes) or not png.startswith(PNG_SIGNATURE):
-                    raise QrLoadFailed()
-                await self._await_stage(
-                    _invoke(on_qr, png), cancelled, deadline
-                )
-                baseline_auth_cookies = self._auth_cookie_fingerprint(
-                    await self._await_stage(context.cookies(), cancelled, deadline)
-                )
-
-                await self._await_stage(
-                    self._wait_for_login(
-                        page,
-                        on_confirming,
-                        cancelled,
-                        context=context,
-                        qr=qr,
-                        baseline_auth_cookies=baseline_auth_cookies,
-                        on_view=on_view or on_qr,
-                        next_interaction=next_interaction,
-                    ),
-                    cancelled,
-                    deadline,
-                )
-                display_name = await self._await_stage(
-                    self._optional_text(page, DISPLAY_NAME_SELECTOR),
-                    cancelled,
-                    deadline,
-                ) or "抖音账号"
-                unique_id = await self._await_stage(
-                    self._optional_text(page, UNIQUE_ID_SELECTOR),
-                    cancelled,
-                    deadline,
-                )
-                storage_state = await self._await_stage(
-                    context.storage_state(), cancelled, deadline
-                )
-                conversation_names = await self._await_stage(
-                    self._visible_conversation_names(page), cancelled, deadline
-                )
-                contact_identities = await self._await_stage(
-                    user_info.drain(), cancelled, deadline
-                )
-                return ScannedAccount(
-                    display_name,
-                    unique_id,
-                    storage_state,
-                    conversation_names,
-                    contact_identities,
-                )
-            finally:
-                try:
-                    if context is not None:
-                        await context.close()
-                finally:
-                    if browser is not None:
-                        await browser.close()
+        try:
+            await self.ensure_prepared(
+                max_age_seconds=self.login_timeout_seconds,
+                cancelled=cancelled,
+                expires_at=expires_at,
+            )
+            return await self.run_prepared(
+                on_qr,
+                on_confirming,
+                cancelled,
+                expires_at=expires_at,
+                on_view=on_view,
+                next_interaction=next_interaction,
+            )
+        finally:
+            await self.close()
 
     async def _open_chat_login(self, page, cancelled) -> None:
         loop = asyncio.get_running_loop()

@@ -74,7 +74,7 @@ class Element {
   }
 }
 
-function createEnvironment(fetchImpl, {preload = false} = {}) {
+function createEnvironment(fetchImpl, {preload = false, mobile = false} = {}) {
   const selectors = [
     "[data-account-scan]",
     "#scan-start",
@@ -85,6 +85,9 @@ function createEnvironment(fetchImpl, {preload = false} = {}) {
     "#scan-status",
     "#scan-countdown",
     "#scan-qr",
+    "#scan-qr-crop",
+    "#scan-qr-save",
+    "#scan-mobile-actions",
     "#scan-placeholder",
     "#scan-text",
     "#scan-type",
@@ -113,6 +116,7 @@ function createEnvironment(fetchImpl, {preload = false} = {}) {
     clearTimeout(id) { timers.delete(id); },
     confirm() { return true; },
     location: {assign() {}, reload() { reloadCount += 1; }},
+    matchMedia() { return {matches: mobile}; },
     setTimeout(callback, delay) {
       const id = nextTimer++;
       timers.set(id, {callback, delay});
@@ -221,7 +225,7 @@ async function activeCancelFailure() {
   assert(dialog.closeCount === 1, "successful cancellation retry did not close dialog");
 }
 
-async function preloadClick() {
+async function noAutoPreload() {
   const calls = [];
   const {elements} = createEnvironment(async (url) => {
     calls.push(url);
@@ -236,15 +240,10 @@ async function preloadClick() {
   }, {preload: true});
 
   await flush();
-  assert(calls.length === 1 && calls[0] === "/accounts/scan", "scan was not preloaded before the click");
-  const preloadedQr = elements["#scan-qr"].src;
-  assert(preloadedQr.includes("/accounts/scan/scan-preloaded/qr"), "QR image was not loaded during preload");
+  assert(calls.length === 0, "opening the page claimed the global scan slot");
   await elements["#scan-start"].emit("click");
-  assert(calls.length === 1, "click created a second scan instead of reusing preload");
-  assert(elements["#scan-dialog"].open, "preloaded scan dialog did not open");
-  assert(!elements["#scan-qr"].hidden, "preloaded QR was not shown immediately");
-  assert(elements["#scan-qr"].src.includes("/accounts/scan/scan-preloaded/qr"), "click lost the prepared browser view");
-  assert(elements["#scan-qr"].srcSetCount >= 1, "prepared browser view was not assigned");
+  assert(calls.length === 1 && calls[0] === "/accounts/scan", "button did not create the scan");
+  assert(elements["#scan-dialog"].open, "scan dialog did not open");
 }
 
 async function qrStaysCachedWhilePolling() {
@@ -259,10 +258,8 @@ async function qrStaysCachedWhilePolling() {
       message: "请使用抖音 App 扫码并在手机确认",
       account_id: null,
     });
-  }, {preload: true});
+  });
 
-  await flush();
-  const preloadedQr = elements["#scan-qr"].src;
   await elements["#scan-start"].emit("click");
   const scheduled = [...timers.values()];
   assert(scheduled.length === 1, "active scan poll was not scheduled");
@@ -271,6 +268,32 @@ async function qrStaysCachedWhilePolling() {
   assert(calls.length === 2, "status polling did not run exactly once");
   assert(elements["#scan-qr"].src.includes("/accounts/scan/scan-cached/qr"), "status polling lost the browser view");
   assert(elements["#scan-qr"].srcSetCount > 1, "status polling did not refresh the live browser view");
+}
+
+async function mobileCrop() {
+  let statusPoll = 0;
+  const {elements, timers} = createEnvironment(async (url) => {
+    if (url === "/accounts/scan") return response(201, {
+      id: "scan-mobile", status: "awaiting_scan", remaining_seconds: 250,
+      error: null, message: "请使用抖音 App 扫码并在手机确认", account_id: null,
+    });
+    statusPoll += 1;
+    return response(200, {
+      id: "scan-mobile", status: "confirming", remaining_seconds: 220,
+      error: null, message: "已扫码", account_id: null,
+    });
+  }, {mobile: true});
+
+  await elements["#scan-start"].emit("click");
+  assert(elements["#scan-qr"].hidden, "mobile showed the full browser before scan");
+  assert(!elements["#scan-qr-crop"].hidden, "mobile QR crop was hidden");
+  assert(elements["#scan-qr-crop"].src.includes("/qr-crop"), "mobile did not request QR crop");
+  assert(elements["#scan-qr-save"].href.includes("/qr-crop"), "save action did not target QR crop");
+  [...timers.values()][0].callback();
+  await flush();
+  assert(statusPoll === 1, "mobile status was not polled");
+  assert(!elements["#scan-qr"].hidden, "mobile did not switch to full browser after scan");
+  assert(elements["#scan-qr-crop"].hidden, "mobile crop stayed visible after scan");
 }
 
 async function pagehideCancel() {
@@ -372,7 +395,8 @@ async function main() {
   if (scenario === "pending-close") await pendingIntent("#scan-close");
   else if (scenario === "pending-cancel") await pendingIntent("#scan-cancel");
   else if (scenario === "active-cancel-failure") await activeCancelFailure();
-  else if (scenario === "preload-click") await preloadClick();
+  else if (scenario === "no-auto-preload") await noAutoPreload();
+  else if (scenario === "mobile-crop") await mobileCrop();
   else if (scenario === "qr-stays-cached") await qrStaysCachedWhilePolling();
   else if (scenario === "pagehide-cancel") await pagehideCancel();
   else if (scenario === "success-close") await successClose();

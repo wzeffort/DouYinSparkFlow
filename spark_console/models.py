@@ -31,6 +31,11 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     failed_login_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     locked_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
+    email_nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
+    email_lookup_hash: Mapped[str | None] = mapped_column(String(64))
+    email_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
@@ -46,8 +51,66 @@ class DouyinAccount(Base):
     cookie_version: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     validation_state: Mapped[str] = mapped_column(String(16), nullable=False, default="unknown")
     last_verified_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalidated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    invalid_reason_code: Mapped[str | None] = mapped_column(String(48))
+    auth_incident_id: Mapped[str | None] = mapped_column(String(36))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
+
+
+class UserTaskQuota(Base):
+    __tablename__ = "user_task_quotas"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    task_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=5)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class TaskQuotaPolicy(Base):
+    __tablename__ = "task_quota_policy"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
+    default_amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    default_duration_days: Mapped[int | None] = mapped_column(Integer)
+    max_saved_tasks: Mapped[int] = mapped_column(Integer, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class TaskQuotaGrant(Base):
+    __tablename__ = "task_quota_grants"
+    __table_args__ = (
+        Index("ix_task_quota_grants_user_window", "user_id", "starts_at", "expires_at"),
+        Index(
+            "uq_task_quota_initial_user",
+            "user_id",
+            unique=True,
+            sqlite_where=text("is_initial = 1"),
+        ),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    amount: Mapped[int] = mapped_column(Integer, nullable=False)
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    label: Mapped[str] = mapped_column(String(64), nullable=False)
+    is_initial: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
 
 
 class DouyinConversation(Base):
@@ -124,6 +187,7 @@ class DouyinLoginSession(Base):
     slot: Mapped[str | None] = mapped_column(String(16), unique=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default=ScanStatus.QUEUED)
     qr_png: Mapped[bytes | None] = mapped_column(LargeBinary)
+    qr_crop_png: Mapped[bytes | None] = mapped_column(LargeBinary)
     account_id: Mapped[str | None] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="SET NULL"))
     error_code: Mapped[str | None] = mapped_column(String(48))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
@@ -252,3 +316,136 @@ class AuditEvent(Base):
     resource_id: Mapped[str | None] = mapped_column(String(36))
     detail: Mapped[str | None] = mapped_column(String(240))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class PendingRegistration(Base):
+    __tablename__ = "pending_registrations"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    username: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    invite_id: Mapped[str] = mapped_column(
+        ForeignKey("invite_codes.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    email_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    email_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    email_lookup_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    send_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    client_key_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resend_available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class EmailVerificationRequest(Base):
+    __tablename__ = "email_verification_requests"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    purpose: Mapped[str] = mapped_column(String(24), nullable=False)
+    email_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    email_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    email_lookup_hash: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
+    code_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    failed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    send_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    code_expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    resend_available_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class NotificationPreference(Base):
+    __tablename__ = "notification_preferences"
+
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), primary_key=True
+    )
+    douyin_login_expired_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    task_repeated_failure_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quota_expiring_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    quota_expired_email: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class UserNotification(Base):
+    __tablename__ = "user_notifications"
+    __table_args__ = (Index("uq_user_notification_dedupe", "dedupe_key", unique=True),)
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    summary: Mapped[str] = mapped_column(String(240), nullable=False)
+    action_path: Mapped[str | None] = mapped_column(String(240))
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class NotificationEvent(Base):
+    __tablename__ = "notification_events"
+    __table_args__ = (
+        Index("uq_notification_event_dedupe", "dedupe_key", unique=True),
+        Index("ix_notification_events_due", "status", "next_attempt_at"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(48), nullable=False)
+    recipient_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    recipient_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    template_key: Mapped[str] = mapped_column(String(48), nullable=False)
+    payload_json: Mapped[str] = mapped_column(Text, nullable=False)
+    dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    next_attempt_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    worker_id: Mapped[str | None] = mapped_column(String(64))
+    claimed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_id: Mapped[str | None] = mapped_column(String(128))
+    error_code: Mapped[str | None] = mapped_column(String(48))
+    sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )
+
+
+class EmailActionToken(Base):
+    __tablename__ = "email_action_tokens"
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    user_id: Mapped[str] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    incident_id: Mapped[str] = mapped_column(String(36), nullable=False, index=True)
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class AppSetting(Base):
+    __tablename__ = "app_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(String(240), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=utc_now, onupdate=utc_now
+    )

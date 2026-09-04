@@ -73,14 +73,14 @@ class InviteServiceTests(unittest.TestCase):
 
         self.assertEqual(self.user.id, invite.used_by_user_id)
         self.assertEqual(self.now, invite.used_at)
-        with self.assertRaisesRegex(ValidationError, "注册信息或邀请码无效"):
+        with self.assertRaisesRegex(ValidationError, "邀请码已被使用"):
             self.invites.consume(plaintext, self.other.id)
 
     def test_expired_invite_is_rejected(self):
         _invite, plaintext = self.invites.create(self.admin.id, timedelta(minutes=1))
         self.now += timedelta(minutes=1)
 
-        with self.assertRaisesRegex(ValidationError, "注册信息或邀请码无效"):
+        with self.assertRaisesRegex(ValidationError, "邀请码已过期"):
             self.invites.consume(plaintext, self.user.id)
 
     def test_revoke_prevents_consumption(self):
@@ -89,7 +89,7 @@ class InviteServiceTests(unittest.TestCase):
         self.invites.revoke(self.admin.id, invite.id)
 
         self.assertEqual(self.now, invite.revoked_at.replace(tzinfo=timezone.utc))
-        with self.assertRaisesRegex(ValidationError, "注册信息或邀请码无效"):
+        with self.assertRaisesRegex(ValidationError, "邀请码已被撤销"):
             self.invites.consume(plaintext, self.user.id)
 
     def test_list_all_returns_newest_invites_first(self):
@@ -103,9 +103,14 @@ class InviteServiceTests(unittest.TestCase):
 class RegistrationPasswordTests(unittest.TestCase):
     def test_registration_password_requires_ten_characters_letters_and_digits(self):
         validate_registration_password("StrongPass1")
-        for password in ("Short1234", "abcdefghij", "1234567890"):
+        cases = {
+            "Short1234": "密码至少需要 10 位",
+            "abcdefghij": "密码必须包含至少一个数字",
+            "1234567890": "密码必须包含至少一个字母",
+        }
+        for password, message in cases.items():
             with self.subTest(password=password):
-                with self.assertRaisesRegex(ValidationError, "注册信息或邀请码无效"):
+                with self.assertRaisesRegex(ValidationError, message):
                     validate_registration_password(password)
 
 

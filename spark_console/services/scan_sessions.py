@@ -173,18 +173,18 @@ class ScanSessionService:
             return None
         return self._reload(scan.id)
 
-    def publish_qr(self, scan_id: str, png: bytes) -> DouyinLoginSession:
-        if (
-            not isinstance(png, bytes)
-            or not png.startswith(PNG_SIGNATURE)
-            or len(png) > MAX_QR_PNG_BYTES
-        ):
-            raise ValidationError("invalid_qr_png")
+    def publish_qr(
+        self, scan_id: str, png: bytes, qr_crop_png: bytes | None = None
+    ) -> DouyinLoginSession:
+        self._validate_png(png)
+        crop = png if qr_crop_png is None else qr_crop_png
+        self._validate_png(crop)
         scan = self._get(scan_id)
         return self._cas_transition(
             scan,
             ScanStatus.AWAITING_SCAN,
             qr_png=png,
+            qr_crop_png=crop,
         )
 
     def publish_view(self, scan_id: str, png: bytes) -> DouyinLoginSession:
@@ -352,6 +352,7 @@ class ScanSessionService:
                 status=ScanStatus.EXPIRED,
                 slot=None,
                 qr_png=None,
+                qr_crop_png=None,
                 account_id=None,
                 error_code="login_timeout",
                 finished_at=current,
@@ -381,6 +382,7 @@ class ScanSessionService:
                 status=ScanStatus.FAILED,
                 slot=None,
                 qr_png=None,
+                qr_crop_png=None,
                 account_id=None,
                 error_code="automation_failed",
                 finished_at=current,
@@ -485,6 +487,7 @@ class ScanSessionService:
             target,
             slot=None,
             qr_png=None,
+            qr_crop_png=None,
             account_id=account_id,
             error_code=error_code,
             finished_at=current,
@@ -505,6 +508,7 @@ class ScanSessionService:
                 status=ScanStatus.EXPIRED,
                 slot=None,
                 qr_png=None,
+                qr_crop_png=None,
                 account_id=None,
                 error_code="login_timeout",
                 finished_at=current,

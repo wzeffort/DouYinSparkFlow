@@ -1,20 +1,87 @@
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from spark_console.models import DouyinContactIdentity, SparkTask, SparkTaskTargetIdentity
+from spark_console.models import (
+    DouyinContactIdentity,
+    SparkTask,
+    SparkTaskTargetIdentity,
+    TaskRun,
+    User,
+)
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
+from spark_console.services.task_capacity import TaskCapacityService
 
 
 _TIME_RE = re.compile(r"^(?:[01]\d|2[0-3]):[0-5]\d$")
+_RELOGIN_RETRY_STAGES = ("authenticating", "selecting_target")
+_RELOGIN_RETRY_NOTE = "重新登录成功，已安排自动补跑"
+
+
+def schedule_recent_safe_failures(
+    session: Session,
+    account_id: str,
+    *,
+    now: datetime | None = None,
+    window: timedelta = timedelta(hours=2),
+    delay: timedelta = timedelta(minutes=1),
+) -> list[str]:
+    current = now or datetime.now(timezone.utc)
+    cutoff = current - window
+    failures = session.scalars(
+        select(TaskRun)
+        .join(SparkTask, SparkTask.id == TaskRun.task_id)
+        .where(
+            SparkTask.douyin_account_id == account_id,
+            SparkTask.enabled.is_(True),
+            TaskRun.status == "failed",
+            TaskRun.stage.in_(_RELOGIN_RETRY_STAGES),
+            TaskRun.finished_at.is_not(None),
+            TaskRun.finished_at >= cutoff,
+        )
+        .order_by(TaskRun.finished_at.desc(), TaskRun.id.desc())
+    ).all()
+    scheduled = []
+    seen_task_ids = set()
+    for failure in failures:
+        if failure.task_id in seen_task_ids:
+            continue
+        seen_task_ids.add(failure.task_id)
+        if _RELOGIN_RETRY_NOTE in (failure.error_summary or ""):
+            continue
+        later_success = session.scalar(
+            select(TaskRun.id)
+            .where(
+                TaskRun.task_id == failure.task_id,
+                TaskRun.status == "success",
+                TaskRun.scheduled_for > failure.scheduled_for,
+            )
+            .limit(1)
+        )
+        if later_success is not None:
+            continue
+        task = session.get(SparkTask, failure.task_id)
+        if task is None or not task.enabled:
+            continue
+        task.next_run_at = TaskCapacityService(
+            session, AuditService(session)
+        ).next_available_run_at(current + delay, task.id)
+        failure.error_summary = (
+            f"{failure.error_summary}；{_RELOGIN_RETRY_NOTE}"
+            if failure.error_summary
+            else _RELOGIN_RETRY_NOTE
+        )[:240]
+        scheduled.append(task.id)
+    session.flush()
+    return scheduled
 
 
 class TaskService:
@@ -60,6 +127,12 @@ class TaskService:
         if not message or len(message) > 500:
             raise ValidationError("消息内容须为 1–500 个字符")
         account = self.accounts.get_owned(owner_id, account_id)
+        owner = self.session.get(User, owner_id)
+        if owner is None:
+            raise NotFound("user not found")
+        capacity = TaskCapacityService(self.session, self.audit)
+        capacity.assert_can_create(owner)
+        capacity.assert_slot_available(send_time)
         stable_target = str(target_sec_uid or "").strip()
         if stable_target and self.session.get(
             DouyinContactIdentity, (account.id, stable_target)
@@ -99,10 +172,22 @@ class TaskService:
 
     def set_enabled_owned(self, owner_id: str, task_id: str, enabled: bool) -> SparkTask:
         task = self.get_owned(owner_id, task_id)
+        return self.set_enabled(task, enabled, owner_id)
+
+    def set_enabled(
+        self, task: SparkTask, enabled: bool, actor_id: str
+    ) -> SparkTask:
         if enabled and task.douyin_account_id is None:
             raise ValidationError("账号已删除，无法启用任务")
+        if enabled and not task.enabled:
+            capacity = TaskCapacityService(self.session, self.audit)
+            owner = self.session.get(User, task.owner_user_id)
+            if owner is None:
+                raise NotFound("user not found")
+            capacity.assert_can_enable(owner)
+            capacity.assert_slot_available(task.send_time, task.id)
         task.enabled = enabled
-        self.audit.write(owner_id, "task.enabled" if enabled else "task.disabled", "spark_task", task.id)
+        self.audit.write(actor_id, "task.enabled" if enabled else "task.disabled", "spark_task", task.id)
         return task
 
     def update_owned(
@@ -131,6 +216,9 @@ class TaskService:
         ) is None:
             raise ValidationError("所选好友不属于当前抖音账号")
         if task.enabled:
+            TaskCapacityService(self.session, self.audit).assert_slot_available(
+                send_time, task.id
+            )
             duplicate = self.session.scalar(
                 select(SparkTask.id).where(
                     SparkTask.id != task.id,

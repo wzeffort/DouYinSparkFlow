@@ -3,6 +3,7 @@ import unittest
 from datetime import timedelta
 from pathlib import Path
 
+from sqlalchemy import inspect
 from sqlalchemy.exc import IntegrityError
 
 from spark_console.config import Settings
@@ -12,6 +13,7 @@ from spark_console.models import (
     DouyinAccountIdentity,
     DouyinLoginSession,
     InviteCode,
+    EmailActionToken,
     ScanStatus,
     SparkTask,
     User,
@@ -20,6 +22,43 @@ from spark_console.models import (
 
 
 class SettingsTests(unittest.TestCase):
+    def _base_env(self, root: Path) -> dict[str, str]:
+        cookie_key = root / "cookie.key"
+        session_key = root / "session.key"
+        cookie_key.write_bytes(b"c" * 32)
+        session_key.write_bytes(b"s" * 32)
+        return {
+            "SPARK_DATA_DIR": str(root),
+            "SPARK_COOKIE_KEY_FILE": str(cookie_key),
+            "SPARK_SESSION_KEY_FILE": str(session_key),
+        }
+
+    def test_email_requires_independent_pii_key_and_https_public_url(self):
+        with tempfile.TemporaryDirectory() as root:
+            root_path = Path(root)
+            env = self._base_env(root_path)
+            env["SPARK_EMAIL_ENABLED"] = "true"
+            with self.assertRaisesRegex(ValueError, "SPARK_PII_KEY_FILE"):
+                Settings.from_env(env)
+
+            pii_key = root_path / "pii.key"
+            pii_key.write_bytes(b"short")
+            env["SPARK_PII_KEY_FILE"] = str(pii_key)
+            with self.assertRaisesRegex(ValueError, "PII key"):
+                Settings.from_env(env)
+
+            pii_key.write_bytes(b"p" * 32)
+            env["SPARK_PUBLIC_BASE_URL"] = "http://example.com"
+            with self.assertRaisesRegex(ValueError, "HTTPS"):
+                Settings.from_env(env)
+
+            env["SPARK_PUBLIC_BASE_URL"] = "https://example.com/"
+            env["RESEND_API_KEY"] = "secret-value"
+            env["RESEND_FROM"] = "Spark <notify@example.com>"
+            settings = Settings.from_env(env)
+            self.assertEqual("https://example.com", settings.public_base_url)
+            self.assertNotIn("secret-value", repr(settings))
+
     def test_requires_existing_32_byte_cookie_key_file(self):
         with tempfile.TemporaryDirectory() as root:
             root_path = Path(root)
@@ -228,6 +267,61 @@ class DatabaseTests(unittest.TestCase):
         )
         self.assertNotIn("douyin_unique_id", DouyinAccount.__table__.columns)
         self.assertIn("douyin_unique_id", DouyinAccountIdentity.__table__.columns)
+
+    def test_email_schema_is_additive_and_idempotent(self):
+        create_schema(self.engine)
+        schema = inspect(self.engine)
+        self.assertTrue(
+            {
+                "pending_registrations",
+                "email_verification_requests",
+                "notification_preferences",
+                "user_notifications",
+                "notification_events",
+                "email_action_tokens",
+                "app_settings",
+            }.issubset(set(schema.get_table_names()))
+        )
+        self.assertTrue(
+            {
+                "email_ciphertext",
+                "email_nonce",
+                "email_lookup_hash",
+                "email_verified_at",
+                "email_updated_at",
+            }.issubset({column["name"] for column in schema.get_columns("users")})
+        )
+        self.assertTrue(
+            {"invalidated_at", "invalid_reason_code", "auth_incident_id"}.issubset(
+                {column["name"] for column in schema.get_columns("douyin_accounts")}
+            )
+        )
+        self.assertIn(
+            "qr_crop_png",
+            {column["name"] for column in schema.get_columns("douyin_login_sessions")},
+        )
+
+    def test_email_lookup_hash_is_unique_when_present(self):
+        with self.assertRaises(IntegrityError):
+            with session_scope(self.engine) as session:
+                session.add_all(
+                    [
+                        User(
+                            username="email-a",
+                            password_hash="hash",
+                            email_lookup_hash="a" * 64,
+                        ),
+                        User(
+                            username="email-b",
+                            password_hash="hash",
+                            email_lookup_hash="a" * 64,
+                        ),
+                    ]
+                )
+
+    def test_action_token_has_no_plaintext_column(self):
+        self.assertIn("token_hash", EmailActionToken.__table__.columns)
+        self.assertNotIn("token", EmailActionToken.__table__.columns)
 
 
 if __name__ == "__main__":

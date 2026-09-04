@@ -12,6 +12,13 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertNotIn("bps", self.compose.lower())
         self.assertNotIn("/var/run/docker.sock", self.compose)
 
+    def test_health_snapshot_is_mounted_read_only_without_host_control(self):
+        common = self.compose.split("x-common: &common", 1)[1].split("\nservices:", 1)[0]
+        self.assertIn("./runtime:/run/spark-health:ro", common)
+        self.assertNotIn("/proc:/host", common)
+        self.assertNotIn("/:/host", common)
+        self.assertNotIn("/var/run/docker.sock", common)
+
     def test_worker_is_not_published_and_is_resource_limited(self):
         worker = self.compose.split("  spark-worker:", 1)[1].split("\nvolumes:", 1)[0]
         self.assertNotIn("ports:", worker)
@@ -42,6 +49,31 @@ class DeploymentContractTests(unittest.TestCase):
     def test_example_environment_has_names_but_no_credential_values(self):
         example = Path(".env.console.example").read_text(encoding="utf-8")
         self.assertNotRegex(example, r"(?im)^(?:.*password|.*token|.*secret)=.+$")
+
+    def test_resend_configuration_is_documented_without_tracking_real_env(self):
+        example = Path(".env.console.example").read_text(encoding="utf-8")
+        gitignore = Path(".gitignore").read_text(encoding="utf-8").splitlines()
+
+        self.assertIn("RESEND_API_KEY=", example.splitlines())
+        self.assertIn("RESEND_FROM=DouYinSparkFlow <notify@oilu.cn>", example)
+        self.assertIn(".env.console", gitignore)
+
+    def test_notifier_is_unpublished_and_pii_key_is_read_only(self):
+        notifier = self.compose.split("  spark-notifier:", 1)[1].split("\nvolumes:", 1)[0]
+        common = self.compose.split("x-common: &common", 1)[1].split("\nservices:", 1)[0]
+        self.assertIn("command: [python, -m, spark_console.notifier]", notifier)
+        self.assertNotIn("ports:", notifier)
+        self.assertIn("mem_limit: 192m", notifier)
+        self.assertIn("./secrets/pii.key:/run/secrets/pii.key:ro", common)
+
+        example = Path(".env.console.example").read_text(encoding="utf-8")
+        for name in (
+            "SPARK_PII_KEY_FILE=/run/secrets/pii.key",
+            "SPARK_PUBLIC_BASE_URL=https://wangze.oilu.cn",
+            "SPARK_EMAIL_ENABLED=false",
+            "SPARK_EMAIL_POLL_SECONDS=10",
+        ):
+            self.assertIn(name, example)
 
 
 if __name__ == "__main__":

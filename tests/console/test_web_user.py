@@ -1,7 +1,8 @@
 import tempfile
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi.testclient import TestClient
@@ -16,8 +17,11 @@ from spark_console.models import (
     DouyinConversation,
     SparkTask,
     SparkTaskTargetIdentity,
+    TaskQuotaGrant,
+    TaskQuotaPolicy,
     TaskRun,
     User,
+    WorkerLock,
 )
 from spark_console.security import PasswordService
 from spark_console.services.accounts import AccountService
@@ -306,6 +310,257 @@ class UserWebTests(unittest.TestCase):
             binding = session.get(SparkTaskTargetIdentity, task.id)
             self.assertEqual("stable-user-id", binding.sec_uid)
 
+    def test_authenticated_slot_availability_is_aggregate_only(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            account = AccountService(
+                session,
+                CookieCipher(self.settings.cookie_key_file.read_bytes()),
+                AuditService(session),
+            ).create(
+                user.id,
+                "隐私账号",
+                b'[{"name":"sessionid","value":"secret-slot-marker"}]',
+            )
+            session.add(
+                SparkTask(
+                    owner_user_id=user.id,
+                    douyin_account_id=account.id,
+                    target_name="private-target-marker",
+                    send_time="11:00",
+                    message_template="private-message-marker",
+                    enabled=True,
+                )
+            )
+        self.login()
+
+        response = self.client.get("/tasks/availability?send_time=11:01")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(0, response.json()["remaining"])
+        self.assertFalse(response.json()["available"])
+        self.assertEqual(3, len(response.json()["suggestions"]))
+        self.assertNotIn("private-target-marker", response.text)
+        self.assertNotIn("private-message-marker", response.text)
+        self.assertNotIn("secret-slot-marker", response.text)
+
+    def test_slot_availability_requires_login(self):
+        response = self.client.get(
+            "/tasks/availability?send_time=11:00", follow_redirects=False
+        )
+
+        self.assertEqual(303, response.status_code)
+        self.assertEqual("/login", response.headers["location"])
+
+    def test_platform_status_api_is_authenticated_and_aggregate_only(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            task = SparkTask(
+                owner_user_id=user.id,
+                target_name="private-dashboard-target",
+                send_time="11:00",
+                message_template="private-dashboard-message",
+                enabled=True,
+            )
+            session.add(task)
+            session.flush()
+            session.add(
+                TaskRun(
+                    task_id=task.id,
+                    scheduled_for=now,
+                    status="success",
+                    stage="complete",
+                    finished_at=now,
+                )
+            )
+            lock = session.get(WorkerLock, 1)
+            lock.lease_until = now + timedelta(minutes=1)
+
+        unauthenticated = self.client.get(
+            "/api/platform-status", follow_redirects=False
+        )
+        self.assertEqual(303, unauthenticated.status_code)
+
+        self.login()
+        response = self.client.get("/api/platform-status")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual(
+            {
+                "total",
+                "success",
+                "running",
+                "pending",
+                "failed",
+                "worker_online",
+                "updated_at",
+            },
+            set(response.json()),
+        )
+        self.assertEqual(1, response.json()["success"])
+        self.assertTrue(response.json()["worker_online"])
+        self.assertNotIn("private-dashboard-target", response.text)
+        self.assertNotIn("private-dashboard-message", response.text)
+
+    def test_dashboard_renders_live_platform_summary_hooks(self):
+        now = datetime.now(timezone.utc)
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            first = SparkTask(
+                owner_user_id=user.id,
+                target_name="首页任务一",
+                send_time="15:00",
+                message_template="消息",
+                enabled=True,
+            )
+            second = SparkTask(
+                owner_user_id=user.id,
+                target_name="首页任务二",
+                send_time="15:02",
+                message_template="消息",
+                enabled=True,
+            )
+            session.add_all((first, second))
+            session.flush()
+            session.add(
+                TaskRun(
+                    task_id=first.id,
+                    scheduled_for=now,
+                    status="success",
+                    stage="complete",
+                    finished_at=now,
+                )
+            )
+        self.login()
+
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn('data-platform-total="2"', response.text)
+        self.assertIn('data-platform-success="1"', response.text)
+        self.assertIn('data-platform-pending="1"', response.text)
+        self.assertIn("今日成功", response.text)
+        self.assertIn('/static/dashboard.js?', response.text)
+
+    def test_task_page_displays_current_quota_usage(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            session.add(
+                DouyinAccount(
+                    owner_user_id=user.id,
+                    display_name="额度账号",
+                    encrypted_cookies=b"encrypted",
+                    cookie_nonce=b"nonce",
+                )
+            )
+            session.add(
+                SparkTask(
+                    owner_user_id=user.id,
+                    target_name="额度任务",
+                    send_time="16:00",
+                    message_template="消息",
+                    enabled=False,
+                )
+            )
+        self.login()
+
+        response = self.client.get("/tasks")
+
+        self.assertIn("<strong>0/5</strong>", response.text)
+        self.assertIn("已保存 1 个，最多保存 20 个任务", response.text)
+        self.assertIn('id="task-slot-status"', response.text)
+        self.assertIn('id="task-slot-suggestions"', response.text)
+
+    def test_task_page_shows_each_quota_time_window_and_saved_task_cap(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+        self.login()
+        self.client.get("/tasks")
+        with session_scope(self.engine) as session:
+            grant = session.scalar(
+                select(TaskQuotaGrant).where(TaskQuotaGrant.user_id == user.id)
+            )
+            grant.label = "限时免费额度"
+            grant.expires_at = datetime(2026, 11, 1, 0, 0, tzinfo=timezone.utc)
+
+        response = self.client.get("/tasks")
+
+        self.assertIn("限时免费额度", response.text)
+        self.assertIn("有效至", response.text)
+        self.assertIn("最多保存 20 个任务", response.text)
+
+    def test_dashboard_reconciles_expired_quota_before_reporting_platform_status(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            session.get(TaskQuotaPolicy, 1).default_amount = 0
+            task = SparkTask(
+                owner_user_id=user.id,
+                target_name="额度到期任务",
+                send_time="18:00",
+                message_template="消息",
+                enabled=True,
+                next_run_at=datetime.now(timezone.utc) + timedelta(hours=1),
+            )
+            session.add(task)
+            session.flush()
+            task_id = task.id
+        self.login()
+
+        response = self.client.get("/dashboard")
+
+        self.assertEqual(200, response.status_code)
+        with session_scope(self.engine) as session:
+            self.assertFalse(session.get(SparkTask, task_id).enabled)
+
+    def test_concurrent_posts_cannot_violate_the_four_minute_gap(self):
+        with session_scope(self.engine) as session:
+            user = session.scalar(select(User).where(User.username == "friend"))
+            user.must_change_password = False
+            account = DouyinAccount(
+                owner_user_id=user.id,
+                display_name="并发账号",
+                encrypted_cookies=b"encrypted",
+                cookie_nonce=b"nonce",
+            )
+            session.add(account)
+            session.flush()
+            account_id = account.id
+            user_id = user.id
+        self.login()
+        page = self.client.get("/tasks")
+        csrf = page.text.split('name="csrf_token" value="', 1)[1].split('"', 1)[0]
+
+        def submit(index):
+            return self.client.post(
+                "/tasks",
+                data={
+                    "csrf_token": csrf,
+                    "account_id": account_id,
+                    "target_name": f"并发好友{index}",
+                    "target_sec_uid": "",
+                    "send_time": "17:00" if index == 0 else "17:01",
+                    "message_template": "今日火花",
+                },
+                follow_redirects=False,
+            ).status_code
+
+        with ThreadPoolExecutor(max_workers=2) as pool:
+            statuses = sorted(pool.map(submit, (0, 1)))
+
+        self.assertEqual([303, 400], statuses)
+        with session_scope(self.engine) as session:
+            tasks = session.scalars(
+                select(SparkTask).where(SparkTask.owner_user_id == user_id)
+            ).all()
+            self.assertEqual(1, len(tasks))
+
     def test_user_can_open_and_submit_task_editor(self):
         self.login()
         with session_scope(self.engine) as session:
@@ -430,6 +685,124 @@ class UserWebTests(unittest.TestCase):
         self.assertIn("执行异常", response.text)
         self.assertIn("繁花", response.text)
         self.assertIn('class="run-timeline"', response.text)
+
+    def test_admin_run_history_includes_every_users_runs(self):
+        password = PasswordService()
+        with session_scope(self.engine) as session:
+            friend = session.scalar(select(User).where(User.username == "friend"))
+            friend.must_change_password = False
+            admin = User(
+                username="history-admin",
+                password_hash=password.hash("Admin-pass-123"),
+                role="admin",
+                must_change_password=False,
+            )
+            other = User(
+                username="history-other",
+                password_hash=password.hash("Other-pass-123"),
+                role="user",
+                must_change_password=False,
+            )
+            session.add_all([admin, other])
+            session.flush()
+            for owner, target in ((friend, "好友甲"), (other, "好友乙")):
+                account = DouyinAccount(
+                    owner_user_id=owner.id,
+                    display_name=f"{owner.username}的抖音",
+                    encrypted_cookies=b"encrypted",
+                    cookie_nonce=b"nonce",
+                )
+                session.add(account)
+                session.flush()
+                task = SparkTask(
+                    owner_user_id=owner.id,
+                    douyin_account_id=account.id,
+                    target_name=target,
+                    send_time="08:00",
+                    message_template="测试消息",
+                )
+                session.add(task)
+                session.flush()
+                session.add(
+                    TaskRun(
+                        task_id=task.id,
+                        scheduled_for=datetime(2026, 8, 30, 0, 0, tzinfo=timezone.utc),
+                        status="success",
+                        stage="complete",
+                    )
+                )
+
+        self.client.post(
+            "/login",
+            data={"username": "history-admin", "password": "Admin-pass-123"},
+            follow_redirects=False,
+        )
+        response = self.client.get("/runs")
+
+        self.assertEqual(200, response.status_code)
+        self.assertIn("好友甲", response.text)
+        self.assertIn("好友乙", response.text)
+        self.assertIn("friend · friend的抖音", response.text)
+        self.assertIn("history-other · history-other的抖音", response.text)
+
+    def test_run_history_paginates_six_entries_per_page(self):
+        with session_scope(self.engine) as session:
+            friend = session.scalar(select(User).where(User.username == "friend"))
+            friend.must_change_password = False
+            task = SparkTask(
+                owner_user_id=friend.id,
+                target_name="分页好友",
+                send_time="08:00",
+                message_template="测试消息",
+            )
+            session.add(task)
+            session.flush()
+            scheduled = datetime(2026, 8, 30, 0, 0, tzinfo=timezone.utc)
+            for index in range(7):
+                session.add(
+                    TaskRun(
+                        task_id=task.id,
+                        scheduled_for=scheduled - timedelta(minutes=index),
+                        status="success",
+                        stage="complete",
+                    )
+                )
+            other = User(
+                username="private-history-owner",
+                password_hash=PasswordService().hash("Other-pass-123"),
+                role="user",
+                must_change_password=False,
+            )
+            session.add(other)
+            session.flush()
+            private_task = SparkTask(
+                owner_user_id=other.id,
+                target_name="不应显示的好友",
+                send_time="08:00",
+                message_template="私有消息",
+            )
+            session.add(private_task)
+            session.flush()
+            session.add(
+                TaskRun(
+                    task_id=private_task.id,
+                    scheduled_for=scheduled + timedelta(minutes=1),
+                    status="success",
+                    stage="complete",
+                )
+            )
+        self.login()
+
+        first_page = self.client.get("/runs")
+        second_page = self.client.get("/runs?page=2")
+
+        self.assertEqual(6, first_page.text.count('class="run-entry '))
+        self.assertIn("第 1 / 2 页 · 共 7 条", first_page.text)
+        self.assertIn('href="/runs?page=2#run-history"', first_page.text)
+        self.assertEqual(1, second_page.text.count('class="run-entry '))
+        self.assertIn("第 2 / 2 页 · 共 7 条", second_page.text)
+        self.assertIn('href="/runs?page=1#run-history"', second_page.text)
+        self.assertNotIn("不应显示的好友", first_page.text + second_page.text)
 
 
 if __name__ == "__main__":

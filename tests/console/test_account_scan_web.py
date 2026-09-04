@@ -110,7 +110,11 @@ class AccountScanWebTests(unittest.TestCase):
             scan = service.start(self.owner_id)
             scan_id = scan.id
             service.claim_next()
-            service.publish_qr(scan_id, PNG_SIGNATURE + b"fixture")
+            service.publish_qr(
+                scan_id,
+                PNG_SIGNATURE + b"full-fixture",
+                PNG_SIGNATURE + b"crop-fixture",
+            )
         return scan_id
 
     def test_authenticated_owner_can_start_with_csrf_and_client_fields_are_ignored(self):
@@ -275,12 +279,26 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertEqual("image/png", response.headers["content-type"])
         self.assertEqual("no-store", response.headers["cache-control"])
-        self.assertEqual(PNG_SIGNATURE + b"fixture", response.content)
+        self.assertEqual(PNG_SIGNATURE + b"full-fixture", response.content)
         self.assertEqual(
             404, self.other_client.get(f"/accounts/scan/{scan_id}/qr").status_code
         )
         self.assertEqual(
             404, self.admin_client.get(f"/accounts/scan/{scan_id}/qr").status_code
+        )
+
+    def test_owner_can_fetch_mobile_qr_crop_but_other_users_cannot(self):
+        scan_id = self._awaiting_scan()
+
+        response = self.owner_client.get(f"/accounts/scan/{scan_id}/qr-crop")
+
+        self.assertEqual(200, response.status_code)
+        self.assertEqual("image/png", response.headers["content-type"])
+        self.assertEqual("no-store", response.headers["cache-control"])
+        self.assertEqual(PNG_SIGNATURE + b"crop-fixture", response.content)
+        self.assertEqual(
+            404,
+            self.other_client.get(f"/accounts/scan/{scan_id}/qr-crop").status_code,
         )
 
     def test_owner_can_send_normalized_browser_click_with_csrf(self):
@@ -413,9 +431,7 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
-        self.assertIn(
-            'src="/static/account_scan.js?v=20260826-4"', response.text
-        )
+        self.assertIn('src="/static/account_scan.js?v=20260902-2"', response.text)
         self.assertIn("修改备注", response.text)
         self.assertIn("当前仅支持短信验证码", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)
@@ -424,13 +440,16 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertNotIn("Cookie JSON", response.text)
         self.assertNotIn("Token", response.text)
         self.assertNotIn("storage_state", response.text)
+        self.assertNotIn('id="scan-qr-open"', response.text)
 
-    def test_account_page_preloads_only_when_user_has_no_bound_account(self):
+    def test_account_page_never_creates_a_real_scan_on_page_load(self):
         owner_page = self.owner_client.get("/accounts")
         other_page = self.other_client.get("/accounts")
 
-        self.assertIn('data-preload="false"', owner_page.text)
-        self.assertIn('data-preload="true"', other_page.text)
+        self.assertNotIn("data-preload", owner_page.text)
+        self.assertNotIn("data-preload", other_page.text)
+        self.assertIn('id="scan-qr-crop"', owner_page.text)
+        self.assertIn('id="scan-qr-save"', owner_page.text)
 
     def test_old_manual_account_submission_is_rejected(self):
         response = self.owner_client.post(

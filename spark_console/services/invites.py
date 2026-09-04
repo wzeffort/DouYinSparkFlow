@@ -77,18 +77,37 @@ class InviteService:
         return plaintext if _digest(plaintext) == invite.code_hash else None
 
     def consume(self, code: str, user_id: str) -> None:
+        invite = self.for_registration(code)
+        self.consume_id(invite.id, user_id)
+
+    def for_registration(self, code: str) -> InviteCode:
         invite = self.session.scalar(
             select(InviteCode).where(InviteCode.code_hash == _digest(code))
         )
         if invite is None:
-            raise ValidationError("注册信息或邀请码无效")
+            raise ValidationError("邀请码不存在，请检查后重试")
+        self._ensure_available(invite)
+        return invite
+
+    def _ensure_available(self, invite: InviteCode) -> None:
+        if invite.used_at is not None:
+            raise ValidationError("邀请码已被使用")
+        if invite.revoked_at is not None:
+            raise ValidationError("邀请码已被撤销")
+        expires_at = invite.expires_at
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+        if expires_at <= self._now():
+            raise ValidationError("邀请码已过期")
+
+    def consume_id(self, invite_id: str, user_id: str) -> None:
 
         now = self._now()
         result = self.session.execute(
             update(InviteCode)
             .execution_options(synchronize_session="fetch")
             .where(
-                InviteCode.id == invite.id,
+                InviteCode.id == invite_id,
                 InviteCode.used_at.is_(None),
                 InviteCode.revoked_at.is_(None),
                 InviteCode.expires_at > now,
@@ -96,8 +115,13 @@ class InviteService:
             .values(used_by_user_id=user_id, used_at=now)
         )
         if result.rowcount != 1:
-            raise ValidationError("注册信息或邀请码无效")
-        self.audit.write(user_id, "invite.consumed", "invite_code", invite.id)
+            invite = self.session.get(InviteCode, invite_id)
+            if invite is None:
+                raise ValidationError("邀请码不存在，请检查后重试")
+            self.session.expire(invite)
+            self._ensure_available(invite)
+            raise ValidationError("邀请码状态已变化，请重新提交")
+        self.audit.write(user_id, "invite.consumed", "invite_code", invite_id)
 
     def list_all(self) -> list[InviteCode]:
         return list(

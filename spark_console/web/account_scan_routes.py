@@ -121,6 +121,23 @@ def build_account_scan_router(
                 return _error(404, "qr_unavailable", "二维码尚未就绪")
         return Response(content=png, media_type="image/png", headers=NO_STORE)
 
+    @router.get("/accounts/scan/{scan_id}/qr-crop")
+    def scan_qr_crop(request: Request, scan_id: str):
+        with session_scope(engine) as db:
+            user, _record = auth.current(request, db)
+            if response := limited(user.id, "qr", QR_LIMIT):
+                return response
+            service = ScanSessionService(db)
+            service.expire_stale()
+            try:
+                scan = service.get_owned(user.id, scan_id)
+            except NotFound:
+                return _error(404, "not_found", "未找到扫码会话")
+            png = scan.qr_crop_png
+            if png is None:
+                return _error(404, "qr_unavailable", "二维码尚未就绪")
+        return Response(content=png, media_type="image/png", headers=NO_STORE)
+
     @router.post("/accounts/scan/{scan_id}/cancel")
     def cancel_scan(
         request: Request, scan_id: str, csrf_token: str = Form(default="")

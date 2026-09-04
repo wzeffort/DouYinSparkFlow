@@ -1,7 +1,42 @@
 {% extends "base.html" %}{% block content %}
-<section class="auth-card"><div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
-<h1>创建账号</h1><p class="muted">输入管理员提供的邀请码即可加入。</p>
-{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
-<form method="post" class="stack"><label>用户名<input name="username" autocomplete="username" minlength="3" required><small class="muted">3–32 位字母、数字、下划线或短横线</small></label><label>密码<input type="password" name="password" autocomplete="new-password" minlength="10" required><small class="muted">至少 10 位，并同时包含字母和数字</small></label><label>确认密码<input type="password" name="password_confirmation" autocomplete="new-password" minlength="10" required></label><label>邀请码<input name="invite_code" autocomplete="off" required></label><button type="submit">注册并返回登录</button></form>
-<p class="auth-link">已有账号？<a href="/login">返回登录</a></p></section>
+<section class="auth-card registration-card">
+  <div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
+  <h1>创建账号</h1>
+  <p class="muted">输入管理员提供的邀请码即可加入。</p>
+  {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+  <form method="post" class="stack registration-form" data-registration-form novalidate>
+    <label>用户名
+      <input name="username" value="{{ form_values.get('username', '') }}" autocomplete="username" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" required{% if field_errors.get('username') %} aria-invalid="true" aria-describedby="username-error"{% endif %}>
+      <small class="muted">3–32 位字母、数字、下划线或短横线</small>
+      <small id="username-error" class="field-error" data-field-error="username"{% if not field_errors.get('username') %} hidden{% endif %}>{{ field_errors.get('username', '') }}</small>
+    </label>
+    {% if email_enabled %}
+    <label>邮箱
+      <input type="email" name="email" value="{{ form_values.get('email', '') }}" autocomplete="email" maxlength="254" required{% if field_errors.get('email') %} aria-invalid="true" aria-describedby="email-error"{% endif %}>
+      <small class="muted">用于验证账号及接收重要异常提醒</small>
+      <small id="email-error" class="field-error" data-field-error="email"{% if not field_errors.get('email') %} hidden{% endif %}>{{ field_errors.get('email', '') }}</small>
+    </label>
+    {% endif %}
+    <label>密码
+      <input type="password" name="password" autocomplete="new-password" minlength="10" required{% if field_errors.get('password') %} aria-invalid="true" aria-describedby="password-error password-rules"{% endif %}>
+      <span id="password-rules" class="password-rules" aria-live="polite">
+        <small data-password-rule="length">至少 10 位</small>
+        <small data-password-rule="letter">包含字母</small>
+        <small data-password-rule="number">包含数字</small>
+      </span>
+      <small id="password-error" class="field-error" data-field-error="password"{% if not field_errors.get('password') %} hidden{% endif %}>{{ field_errors.get('password', '') }}</small>
+    </label>
+    <label>确认密码
+      <input type="password" name="password_confirmation" autocomplete="new-password" minlength="10" required{% if field_errors.get('password_confirmation') %} aria-invalid="true" aria-describedby="password-confirmation-error"{% endif %}>
+      <small id="password-confirmation-error" class="field-error" data-field-error="password_confirmation"{% if not field_errors.get('password_confirmation') %} hidden{% endif %}>{{ field_errors.get('password_confirmation', '') }}</small>
+    </label>
+    <label>邀请码
+      <input name="invite_code" value="{{ form_values.get('invite_code', '') }}" autocomplete="off" required{% if field_errors.get('invite_code') %} aria-invalid="true" aria-describedby="invite-code-error"{% endif %}>
+      <small id="invite-code-error" class="field-error" data-field-error="invite_code"{% if not field_errors.get('invite_code') %} hidden{% endif %}>{{ field_errors.get('invite_code', '') }}</small>
+    </label>
+    <button type="submit">{% if email_enabled %}发送邮箱验证码{% else %}注册并返回登录{% endif %}</button>
+  </form>
+  <p class="auth-link">已有账号？<a href="/login">返回登录</a></p>
+</section>
+<script defer src="/static/register.js?v=20260902-1"></script>
 {% endblock %}

@@ -14,6 +14,9 @@
   const statusNode = document.querySelector("#scan-status");
   const countdownNode = document.querySelector("#scan-countdown");
   const qrNode = document.querySelector("#scan-qr");
+  const qrCropNode = document.querySelector("#scan-qr-crop");
+  const qrSaveNode = document.querySelector("#scan-qr-save");
+  const mobileActionsNode = document.querySelector("#scan-mobile-actions");
   const placeholderNode = document.querySelector("#scan-placeholder");
   const textNode = document.querySelector("#scan-text");
   const typeButton = document.querySelector("#scan-type");
@@ -27,6 +30,7 @@
   let preparedState = null;
   let preloadPromise = null;
   let qrLoadedFor = null;
+  const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
 
   function clearTimer() {
     if (timer !== null) window.clearTimeout(timer);
@@ -34,10 +38,14 @@
   }
 
   function setQrVisible(visible) {
-    qrNode.hidden = !visible;
+    const cropMode = visible && mobileView && currentStatus === "awaiting_scan";
+    qrNode.hidden = !visible || cropMode;
+    qrCropNode.hidden = !cropMode;
+    mobileActionsNode.hidden = !cropMode;
     placeholderNode.hidden = visible;
     if (!visible) {
       qrNode.removeAttribute("src");
+      qrCropNode.removeAttribute("src");
       qrLoadedFor = null;
     }
   }
@@ -45,6 +53,9 @@
   function loadQrOnce(id) {
     if (!id) return;
     qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr?v=${Date.now()}`;
+    const cropUrl = `/accounts/scan/${encodeURIComponent(id)}/qr-crop?v=${Date.now()}`;
+    if (mobileView) qrCropNode.src = cropUrl;
+    qrSaveNode.href = cropUrl;
     qrLoadedFor = id;
   }
 
@@ -370,7 +381,4 @@
     );
     scanId = null;
   });
-  if (root.dataset.preload === "true") {
-    preloadPromise = preloadScan();
-  }
 })();

@@ -17,6 +17,7 @@ from spark_console.auth_scanner import (
 )
 from spark_console.auth_worker import AuthWorker
 from spark_console.config import Settings
+from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import (
     AuditEvent,
@@ -25,9 +26,14 @@ from spark_console.models import (
     DouyinConversation,
     DouyinLoginSession,
     ScanStatus,
+    SparkTask,
+    TaskRun,
     User,
 )
+from spark_console.services.accounts import AccountService
+from spark_console.services.audits import AuditService
 from spark_console.services.scan_sessions import PNG_SIGNATURE, ScanSessionService
+from spark_console.services.tasks import TaskService
 
 
 COOKIE_MARKER = "worker-cookie-marker"
@@ -172,6 +178,24 @@ class _StopAwareScanner:
         raise ScanCancelled()
 
 
+class _WarmLifecycleScanner(_LifecycleScanner):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.prepared = 0
+        self.prepared_runs = 0
+        self.closed = 0
+
+    async def ensure_prepared(self, *, max_age_seconds=120):
+        self.prepared += 1
+
+    async def run_prepared(self, *args, **kwargs):
+        self.prepared_runs += 1
+        return await self.run(*args, **kwargs)
+
+    async def close(self):
+        self.closed += 1
+
+
 class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         asyncio.get_running_loop().slow_callback_duration = 1.0
@@ -264,6 +288,78 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual("新的昵称", contact.nickname)
             self.assertEqual("我的备注", contact.remark_name)
         self.assertEqual(0, len(scanner.state))
+
+    async def test_worker_uses_prepared_scanner_lifecycle_when_available(self):
+        scan_id = self._start_scan()
+        scanner = _WarmLifecycleScanner(self.engine, scan_id)
+        worker = AuthWorker(self.settings, self.engine, scanner=scanner)
+
+        await worker.prepare_scanner()
+        claimed = await worker.run_once()
+        await worker.close()
+
+        self.assertTrue(claimed)
+        self.assertEqual(1, scanner.prepared)
+        self.assertEqual(1, scanner.prepared_runs)
+        self.assertEqual(1, scanner.closed)
+
+    async def test_successful_relogin_reuses_account_and_schedules_safe_failure(self):
+        with session_scope(self.engine) as session:
+            audit = AuditService(session)
+            accounts = AccountService(
+                session, CookieCipher(self.settings.cookie_key_file.read_bytes()), audit
+            )
+            account = accounts.create_from_storage_state(
+                self.owner_id,
+                "旧账号",
+                _storage_state(),
+                "douyin-123",
+            )
+            task = TaskService(session, accounts, audit).create(
+                self.owner_id, account.id, "朋友", "09:00", "今日火花"
+            )
+            account.validation_state = "invalid"
+            failed_at = datetime.now(timezone.utc) - timedelta(minutes=10)
+            run = TaskRun(
+                task_id=task.id,
+                scheduled_for=failed_at,
+                status="failed",
+                stage="authenticating",
+                finished_at=failed_at,
+                error_code="login_expired",
+                error_summary="抖音账号信息已过期，请重新登录后再试",
+            )
+            session.add(run)
+            session.flush()
+            account_id = account.id
+            task_id = task.id
+            run_id = run.id
+
+        scan_id = self._start_scan()
+        started_at = datetime.now(timezone.utc)
+        scanner = _LifecycleScanner(self.engine, scan_id)
+
+        self.assertTrue(
+            await AuthWorker(self.settings, self.engine, scanner=scanner).run_once()
+        )
+
+        with Session(self.engine) as session:
+            persisted_scan = session.get(DouyinLoginSession, scan_id)
+            persisted_account = session.get(DouyinAccount, account_id)
+            persisted_task = session.get(SparkTask, task_id)
+            persisted_run = session.get(TaskRun, run_id)
+            accounts = session.scalars(select(DouyinAccount)).all()
+            next_run = persisted_task.next_run_at.replace(tzinfo=timezone.utc)
+            self.assertEqual(account_id, persisted_scan.account_id)
+            self.assertEqual(1, len(accounts))
+            self.assertEqual("valid", persisted_account.validation_state)
+            self.assertGreaterEqual(next_run, started_at + timedelta(seconds=50))
+            # Scheduling rounds up to the next whole minute, so a one-minute
+            # delay can land up to two wall-clock minutes after this assertion.
+            self.assertLessEqual(next_run, started_at + timedelta(seconds=130))
+            self.assertIn(
+                "重新登录成功，已安排自动补跑", persisted_run.error_summary
+            )
 
     async def test_typed_scanner_errors_map_to_fixed_public_codes(self):
         cases = (

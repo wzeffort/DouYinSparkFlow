@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from spark_console.credentials import CredentialError, CredentialPayload
@@ -13,6 +13,7 @@ from spark_console.models import (
     DouyinContactIdentity,
     DouyinConversation,
     SparkTask,
+    UserNotification,
     utc_now,
 )
 from spark_console.services import NotFound, ValidationError
@@ -73,22 +74,72 @@ class AccountService:
         except (CredentialError, TypeError, ValueError, UnicodeEncodeError):
             raise ValidationError("浏览器凭据格式无效") from None
         sealed = self.cipher.encrypt(raw)
-        account = DouyinAccount(
-            owner_user_id=owner_id,
-            display_name=name,
-            encrypted_cookies=sealed.ciphertext,
-            cookie_nonce=sealed.nonce,
-            cookie_version=2,
-            validation_state="valid",
-            last_verified_at=utc_now(),
-        )
-        self.session.add(account)
-        self.session.flush()
-        self.session.add(
-            DouyinAccountIdentity(
-                account_id=account.id, douyin_unique_id=normalized_unique_id
+        account = None
+        if normalized_unique_id is not None:
+            account = self.session.scalar(
+                select(DouyinAccount)
+                .join(
+                    DouyinAccountIdentity,
+                    DouyinAccountIdentity.account_id == DouyinAccount.id,
+                )
+                .where(
+                    DouyinAccount.owner_user_id == owner_id,
+                    DouyinAccountIdentity.douyin_unique_id
+                    == normalized_unique_id,
+                )
+                .order_by(DouyinAccount.updated_at.desc())
+                .limit(1)
             )
-        )
+        reused = account is not None
+        if reused:
+            previous_incident_id = account.auth_incident_id
+            account.display_name = name
+            account.encrypted_cookies = sealed.ciphertext
+            account.cookie_nonce = sealed.nonce
+            account.cookie_version = 2
+            account.validation_state = "valid"
+            account.last_verified_at = utc_now()
+            account.invalidated_at = None
+            account.invalid_reason_code = None
+            account.auth_incident_id = None
+            if previous_incident_id:
+                self.session.execute(
+                    update(UserNotification)
+                    .where(
+                        UserNotification.user_id == owner_id,
+                        UserNotification.dedupe_key
+                        == f"douyin-auth:{previous_incident_id}:in-app",
+                        UserNotification.read_at.is_(None),
+                    )
+                    .values(read_at=utc_now())
+                )
+            self.session.execute(
+                delete(DouyinConversation).where(
+                    DouyinConversation.account_id == account.id
+                )
+            )
+            self.session.execute(
+                delete(DouyinContactIdentity).where(
+                    DouyinContactIdentity.account_id == account.id
+                )
+            )
+        else:
+            account = DouyinAccount(
+                owner_user_id=owner_id,
+                display_name=name,
+                encrypted_cookies=sealed.ciphertext,
+                cookie_nonce=sealed.nonce,
+                cookie_version=2,
+                validation_state="valid",
+                last_verified_at=utc_now(),
+            )
+            self.session.add(account)
+            self.session.flush()
+            self.session.add(
+                DouyinAccountIdentity(
+                    account_id=account.id, douyin_unique_id=normalized_unique_id
+                )
+            )
         seen = set()
         for display_name in conversation_names:
             normalized_name = str(display_name).strip()
@@ -115,7 +166,12 @@ class AccountService:
                     remark_name=_limited(identity.remark_name, 256),
                 )
             )
-        self.audit.write(owner_id, "account.created", "douyin_account", account.id)
+        self.audit.write(
+            owner_id,
+            "account.rebound" if reused else "account.created",
+            "douyin_account",
+            account.id,
+        )
         return account
 
     def rename_owned(
