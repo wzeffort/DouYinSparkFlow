@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from contextlib import contextmanager
+import os
+import stat
+from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session
@@ -68,6 +71,27 @@ def create_schema(engine: Engine) -> None:
             )
         if session.get(AppSetting, "email_paused") is None:
             session.add(AppSetting(key="email_paused", value="false"))
+    secure_sqlite_files(engine)
+
+
+def secure_sqlite_files(engine: Engine) -> None:
+    """Restrict only this SQLite database and its sidecars; never follow symlinks."""
+    database = engine.url.database
+    if os.name != 'posix' or engine.dialect.name != 'sqlite' or not database or database == ':memory:':
+        return
+    path = Path(database).absolute()
+    for name in (str(path), str(path) + '-wal', str(path) + '-shm'):
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        except FileNotFoundError:
+            continue
+        try:
+            metadata = os.fstat(descriptor)
+            if not stat.S_ISREG(metadata.st_mode) or metadata.st_uid != os.geteuid():
+                raise PermissionError('database permission hardening requires an owned regular file')
+            os.fchmod(descriptor, 0o600)
+        finally:
+            os.close(descriptor)
 
 
 def run_additive_migrations(engine: Engine) -> None:

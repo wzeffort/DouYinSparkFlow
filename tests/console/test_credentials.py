@@ -3,8 +3,8 @@ import hashlib
 import json
 import unittest
 from pathlib import Path
-from types import ModuleType
-from unittest.mock import patch
+from types import ModuleType, SimpleNamespace
+from unittest.mock import patch, AsyncMock
 
 from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.executor import DouyinExecutor
@@ -421,6 +421,9 @@ class _FakePage:
     async def goto(self, *_args, **_kwargs):
         return None
 
+    async def wait_for_function(self, *_args, **_kwargs):
+        return SimpleNamespace(json_value=AsyncMock(return_value='ready'))
+
 
 class _FakeEditor:
     def __init__(self):
@@ -644,6 +647,7 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("automation_failed", result.error_code)
         self.assertEqual(1, browser.close_count)
 
+    @patch('spark_console.executor.verify_chat_recipient_name', new=AsyncMock())
     async def test_executor_records_submitted_when_delivery_confirmation_times_out(self):
         page = _FakeSendingPage()
         browser = _FakeBrowser()
@@ -719,6 +723,7 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("已找到好友，但聊天窗口没有打开", result.error_summary)
         self.assertTrue(result.retryable)
 
+    @patch('spark_console.executor.verify_chat_recipient_name', new=AsyncMock())
     async def test_executor_reselects_target_when_chat_editor_misses_first_click(self):
         page = _FakeRecoveringConversationPage()
         browser = _FakeBrowser()
@@ -795,6 +800,7 @@ class ExecutorCredentialTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual("抖音账号信息已过期，请重新登录后再试", result.error_summary)
         self.assertFalse(result.retryable)
 
+    @patch('spark_console.executor.verify_chat_recipient_name', new=AsyncMock())
     async def test_executor_resolves_current_alias_from_stable_identity(self):
         page = _FakeIdentityPage()
         browser = _FakeBrowser()

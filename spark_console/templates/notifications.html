@@ -1,1 +1,33 @@
-{% extends "base.html" %}{% block content %}<header class="page-header"><div><p class="eyebrow">NOTIFICATIONS</p><h1>通知中心</h1><p>账号异常和重要系统提醒会保留在这里。</p></div></header><section class="panel" id="notification-list">{% if notices %}<div class="timeline">{% for notice in notices %}<article class="timeline-card {% if not notice.read_at %}is-unread{% endif %}"><div><span class="status-pill">{{ notice.kind }}</span><h2>{{ notice.title }}</h2><p>{{ notice.summary }}</p><small class="muted">{{ notice.created_at|shanghai_time }}</small></div><div class="action-row">{% if notice.action_path %}<a class="button-link" href="{{ notice.action_path }}">立即处理</a>{% endif %}{% if not notice.read_at %}<form method="post" action="/notifications/{{ notice.id }}/read"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet" type="submit">标为已读</button></form>{% endif %}</div></article>{% endfor %}</div>{% else %}<div class="empty-state"><h2>暂无通知</h2><p>账号状态正常时，这里会保持安静。</p></div>{% endif %}{% if pages > 1 %}<nav class="pagination" aria-label="通知分页">{% if page_number > 1 %}<a href="?page_number={{ page_number - 1 }}#notification-list">上一页</a>{% endif %}<span>{{ page_number }} / {{ pages }}</span>{% if page_number < pages %}<a href="?page_number={{ page_number + 1 }}#notification-list">下一页</a>{% endif %}</nav>{% endif %}</section>{% endblock %}
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head compact-page-head">
+  <div><h1>消息中心</h1><p>{{ '已发公告与我的系统提醒' if user.role == 'admin' else '平台公告与系统提醒' }} · 每页 8 条</p></div>
+  {% if user.role == 'admin' %}<a class="button" href="/admin/announcements">发站内公告</a>{% endif %}
+</header>
+<section class="panel" id="notification-list">
+  <div class="timeline">
+    {% for kind, notice, recipient, occurred_at in message_items %}
+      {% if kind == 'sent' %}
+      <article class="message-sent-card">
+        <div class="announcement-record-heading"><h2>{{ notice.title }}</h2><span class="pill {{ 'good' if notice.status == 'published' else ('warn' if notice.status == 'scheduled' else 'off') }}">{{ {'published':'已发布','scheduled':'待发布','withdrawn':'已撤回'}.get(notice.status,'处理中') }}</span></div>
+        <p class="announcement-body">{{ notice.body }}</p>
+        <div class="message-sent-footer"><div class="announcement-record-meta"><span>接收 {{ notice.recipients|length }} 人</span><span>已读 {{ notice.recipients|selectattr('read_at')|list|length }} 人</span><time>{{ occurred_at|shanghai_time }}</time>{% if notice.status == 'scheduled' %}<span>计划发布 {{ notice.scheduled_for|shanghai_time }}</span>{% endif %}</div>{% if notice.status != 'withdrawn' %}<form method="post" action="/admin/announcements/{{ notice.id }}/withdraw" data-confirm="确定撤回这条公告？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet compact-button">撤回</button></form>{% endif %}</div>
+      </article>
+      {% elif kind == 'announcement' %}
+      <article class="timeline-card announcement-card {% if not recipient.read_at %}is-unread{% endif %}">
+        <div><span class="status-pill">平台公告</span><h2>{{ notice.title }}</h2><p class="announcement-body">{{ notice.body }}</p><small class="muted">{{ occurred_at|shanghai_time }}</small></div>
+        {% if not recipient.read_at %}<form method="post" action="/announcements/{{ notice.id }}/read"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">标为已读</button></form>{% endif %}
+      </article>
+      {% else %}
+      <article class="timeline-card {% if not notice.read_at %}is-unread{% endif %}">
+        <div><span class="status-pill">系统提醒</span><h2>{{ notice.title }}</h2><p>{{ notice.summary }}</p><small class="muted">{{ occurred_at|shanghai_time }}</small></div>
+        <div class="action-row">{% if notice.action_path %}<a class="button-link" href="{{ notice.action_path }}">立即处理</a>{% endif %}{% if not notice.read_at %}<form method="post" action="/messages/system/{{ notice.id }}/read"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">标为已读</button></form>{% endif %}</div>
+      </article>
+      {% endif %}
+    {% else %}
+      <div class="empty-state"><h2>暂无消息</h2><p>账号状态正常且没有平台公告时，这里会保持安静。</p></div>
+    {% endfor %}
+  </div>
+  {% if pages > 1 %}<nav class="admin-pager" aria-label="消息分页">{% if page_number > 1 %}<a class="quiet compact-button" href="?page_number={{ page_number - 1 }}#notification-list">上一页</a>{% endif %}<span>第 {{ page_number }} / {{ pages }} 页 · 共 {{ message_total }} 条</span>{% if page_number < pages %}<a class="quiet compact-button" href="?page_number={{ page_number + 1 }}#notification-list">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+{% endblock %}

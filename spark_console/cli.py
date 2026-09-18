@@ -4,13 +4,13 @@ import argparse
 import getpass
 import json
 import os
-import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import select
 
 from spark_console.config import Settings
+from spark_console.backup import backup_database
 from spark_console.crypto import CookieCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.models import User
@@ -72,9 +72,9 @@ def command_import_legacy(args) -> int:
 def command_backup(_args) -> int:
     settings, _engine = runtime()
     source = settings.data_dir / "spark.db"
-    destination = settings.data_dir / "backups" / f"spark-{datetime.now(timezone.utc):%Y%m%dT%H%M%SZ}.db"
+    destination = settings.data_dir / "backups" / f"spark-{datetime.now(timezone.utc):%Y%m%dT%H%M%S%fZ}.db"
     destination.parent.mkdir(mode=0o700, exist_ok=True)
-    shutil.copy2(source, destination)
+    backup_database(source, destination)
     os.chmod(destination, 0o600)
     print(destination)
     return 0

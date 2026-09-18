@@ -7,7 +7,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from spark_console.models import SparkTask, TaskRun, WorkerLock
+from spark_console.models import SparkTask, TaskRun, TaskRunRecipient, WorkerLock
 
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
@@ -17,6 +17,8 @@ SHANGHAI = ZoneInfo("Asia/Shanghai")
 class PlatformStatus:
     total: int
     success: int
+    confirmed: int
+    submitted: int
     running: int
     pending: int
     failed: int
@@ -38,32 +40,42 @@ def build_platform_status(
     local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     start = local_start.astimezone(timezone.utc)
     end = (local_start + timedelta(days=1)).astimezone(timezone.utc)
-    task_ids = list(
+    task_ids = set(
         session.scalars(
             select(SparkTask.id).where(SparkTask.enabled.is_(True))
         ).all()
     )
     latest_by_task = {}
-    if task_ids:
-        runs = session.scalars(
-            select(TaskRun)
-            .where(
-                TaskRun.task_id.in_(task_ids),
-                TaskRun.scheduled_for >= start,
-                TaskRun.scheduled_for < end,
-            )
-            .order_by(TaskRun.scheduled_for.desc(), TaskRun.id.desc())
-        ).all()
-        for run in runs:
-            latest_by_task.setdefault(run.task_id, run)
+    runs = session.scalars(
+        select(TaskRun)
+        .where(
+            TaskRun.scheduled_for >= start,
+            TaskRun.scheduled_for < end,
+        )
+        .order_by(TaskRun.scheduled_for.desc(), TaskRun.id.desc())
+    ).all()
+    # Keep today's outcomes visible even when a task is subsequently paused.
+    # Retries remain history entries; the overview counts each task once.
+    for run in runs:
+        task_ids.add(run.task_id)
+        latest_by_task.setdefault(run.task_id, run)
 
-    success = running = failed = 0
+    latest_ids = [run.id for run in latest_by_task.values()]
+    unconfirmed_ids = set(session.scalars(select(TaskRunRecipient.run_id).where(
+        TaskRunRecipient.run_id.in_(latest_ids),
+        TaskRunRecipient.status.in_(['submitted', 'uncertain']),
+    )).all()) if latest_ids else set()
+    success = confirmed = submitted = running = failed = 0
     for run in latest_by_task.values():
         if run.status == "success":
             success += 1
+            if run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or run.id in unconfirmed_ids:
+                submitted += 1
+            else:
+                confirmed += 1
         elif run.status == "running":
             running += 1
-        elif run.status in {"failed", "skipped"}:
+        elif run.status in {"failed", "skipped", "partial"}:
             failed += 1
     pending = len(task_ids) - success - running - failed
     lock = session.get(WorkerLock, 1)
@@ -71,6 +83,8 @@ def build_platform_status(
     return PlatformStatus(
         total=len(task_ids),
         success=success,
+        confirmed=confirmed,
+        submitted=submitted,
         running=running,
         pending=max(0, pending),
         failed=failed,

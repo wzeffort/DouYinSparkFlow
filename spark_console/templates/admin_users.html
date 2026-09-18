@@ -10,25 +10,28 @@
 <section class="panel admin-users-directory">
   <div class="section-head"><div><span class="section-kicker">ACCESS & QUOTA</span><h2>账号目录</h2><p>每页 8 个账号；普通用户可进入额度管理，管理员账号不会占用任务额度。</p></div></div>
   <div class="admin-users-toolbar">
-    <form method="post" action="/admin/users" class="inline-form admin-create-form">
+    <form method="post" action="/admin/users" class="admin-create-form directory-create-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-      <input name="username" placeholder="3–32 位用户名" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" required>
-      <button>创建用户</button>
+      <h3>新建账号</h3>
+      <label>用户名<input name="username" placeholder="3–32 位用户名" minlength="3" maxlength="32" pattern="[A-Za-z0-9_-]{3,32}" required></label>
+      <label>开通月卡名额<input type="number" name="monthly_slots" min="0" max="100" value="1" required></label>
+      <button>创建用户并开通</button>
+      <p class="field-hint">每个名额有效期 30 天，可建 1 个任务、最多 5 位好友，支持独立续期。填 0 暂不开通；此方式不另赠免费额度。</p>
     </form>
     <form method="get" action="/admin/users" class="filter-form user-search-form">
-      <input type="search" name="q" value="{{ user_q }}" placeholder="搜索用户名">
+      <input type="search" name="q" aria-label="搜索用户名" value="{{ user_q }}" placeholder="搜索用户名"><select name="status" aria-label="用户状态"><option value="">全部状态</option>{% for value,label in [('account_invalid','抖音账号失效'),('email_unverified','邮箱未验证'),('quota_expiring','额度即将到期'),('quota_expired','额度已到期'),('disabled','已停用')] %}<option value="{{ value }}"{% if user_status==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select>
       <button class="quiet">搜索</button>
-      {% if user_q %}<a class="compact-link" href="/admin/users">清除</a>{% endif %}
+      {% if user_q or user_status %}<a class="compact-link" href="/admin/users">清除</a>{% endif %}
     </form>
   </div>
   <div class="admin-user-list directory-user-list">
-    {% for item in users %}
+    {% for row in users %}{% set item=row.user %}
     <article class="item admin-item directory-user-row" data-admin-user-row>
-      <div class="directory-user-identity"><span class="user-avatar">{{ item.username[:1]|upper }}</span><div><strong>{{ item.username }}</strong><p class="muted">{{ '管理员' if item.role == 'admin' else '普通用户' }} · {{ '正常' if item.status == 'active' else '已停用' }}{% if item.role != 'admin' %} · 启用 {{ user_quota_summaries[item.id].active_usage }}/{{ user_quota_summaries[item.id].limit }} · 保存 {{ user_quota_summaries[item.id].saved_usage }}/{{ user_quota_summaries[item.id].max_saved_tasks }}{% endif %}</p></div></div>
-      {% if item.id != user.id %}<div class="actions action-group">{% if item.role != 'admin' %}<a class="button quiet compact-button" href="/admin/users/{{ item.id }}/quota">管理额度</a>{% endif %}<form method="post" action="/admin/users/{{ item.id }}/toggle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">{{ '停用' if item.status == 'active' else '启用' }}</button></form><form method="post" action="/admin/users/{{ item.id }}/delete" onsubmit="return confirm('确定永久删除该用户及任务？')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirmation" value="{{ item.username }}"><button class="danger quiet">删除</button></form></div>{% endif %}
+      <div class="directory-user-identity"><span class="user-avatar">{{ item.username[:1]|upper }}</span><div><strong>{{ item.username }}</strong><p class="muted">{{ '管理员' if item.role == 'admin' else '普通用户' }} · {{ '正常' if item.status == 'active' else '已停用' }}</p><div class="user-status-grid"><span>邮箱：{{ row.email_label }}</span><span>抖音状态：{{ row.douyin_label }}{% if row.last_verified_at %} · 最近核验 {{ row.last_verified_at|shanghai_time }}{% endif %}</span>{% if item.role!='admin' %}<span>任务：启用 {{ row.active_tasks }}/保存 {{ row.saved_tasks }}</span><span>额度：{{ row.quota_limit }}{% if row.quota_permanent %} · 含长期额度{% endif %}{% if row.quota_days %} · 最近 {{ row.quota_days }} 天后到期（{{ row.quota_expires_at|shanghai_time }}）{% elif not row.quota_permanent %} · 已到期{% endif %}</span>{% endif %}</div></div></div>
+      {% if item.id != user.id %}<div class="actions action-group">{% if item.role != 'admin' %}<a class="button quiet compact-button" href="/admin/users/{{ item.id }}/quota">管理额度</a>{% endif %}<form method="post" action="/admin/users/{{ item.id }}/toggle"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">{{ '停用' if item.status == 'active' else '启用' }}</button></form><form method="post" action="/admin/users/{{ item.id }}/delete" data-confirm="确定永久删除该用户及任务？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="confirmation" value="{{ item.username }}"><button class="danger quiet">删除</button></form></div>{% endif %}
     </article>
     {% else %}<div class="empty compact-empty"><span>◇</span><h3>没有匹配的用户</h3><p>更换用户名关键词后再试。</p></div>{% endfor %}
   </div>
-  {% if user_page.pages > 1 %}<nav class="admin-pager" aria-label="用户分页"><a class="quiet compact-button{% if not user_page.has_previous %} disabled{% endif %}" {% if user_page.has_previous %}href="/admin/users?page={{ user_page.page - 1 }}{% if user_q %}&q={{ user_q|urlencode }}{% endif %}"{% else %}aria-disabled="true"{% endif %}>上一页</a><span>第 {{ user_page.page }} / {{ user_page.pages }} 页 · 共 {{ user_page.total }} 个用户</span><a class="quiet compact-button{% if not user_page.has_next %} disabled{% endif %}" {% if user_page.has_next %}href="/admin/users?page={{ user_page.page + 1 }}{% if user_q %}&q={{ user_q|urlencode }}{% endif %}"{% else %}aria-disabled="true"{% endif %}>下一页</a></nav>{% else %}<p class="admin-count">共 {{ user_page.total }} 个用户</p>{% endif %}
+  {% if user_page.pages > 1 %}<nav class="admin-pager" aria-label="用户分页"><a class="quiet compact-button{% if not user_page.has_previous %} disabled{% endif %}" {% if user_page.has_previous %}href="/admin/users?page={{ user_page.page - 1 }}&q={{ user_q|urlencode }}&status={{ user_status }}"{% else %}aria-disabled="true"{% endif %}>上一页</a><span>第 {{ user_page.page }} / {{ user_page.pages }} 页 · 共 {{ user_page.total }} 个用户</span><a class="quiet compact-button{% if not user_page.has_next %} disabled{% endif %}" {% if user_page.has_next %}href="/admin/users?page={{ user_page.page + 1 }}&q={{ user_q|urlencode }}&status={{ user_status }}"{% else %}aria-disabled="true"{% endif %}>下一页</a></nav>{% else %}<p class="admin-count">共 {{ user_page.total }} 个用户</p>{% endif %}
 </section>
 {% endblock %}

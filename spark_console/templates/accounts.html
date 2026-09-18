@@ -15,7 +15,9 @@
       <article class="item account-item">
         <div class="account-summary">
           <strong>{{ account.display_name }}</strong>
-          <p class="muted">验证状态：{{ account.validation_state }}</p>
+          {% if account.validation_state == 'invalid' %}
+          <p class="notice account-auth-notice">{% if account.invalid_reason_code == 'chat_ui_unavailable' %}登录状态异常，请重新绑定{% else %}登录已失效，请重新绑定{% endif %}</p>
+          {% else %}<p class="muted">登录状态正常</p>{% endif %}
         </div>
         <div class="account-controls">
           <form method="post" action="/accounts/{{ account.id }}/rename" class="account-rename">

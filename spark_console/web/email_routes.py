@@ -4,7 +4,7 @@ import secrets
 
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from spark_console.db import session_scope
 from spark_console.models import (
@@ -67,7 +67,7 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
         password_confirmation: str = Form(default=""),
     ):
         error = None
-        with session_scope(engine) as db:
+        with auth.mutation_lock, session_scope(engine) as db:
             try:
                 if new_password != password_confirmation:
                     raise ValidationError("两次密码不一致")
@@ -191,27 +191,6 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
             preference.quota_expired_email = bool(quota_expired_email)
         return RedirectResponse("/settings/email?notice=saved", 303)
 
-    @router.get("/notifications")
-    def notifications_page(request: Request, page_number: int = 1):
-        with session_scope(engine) as db:
-            user, _record, context = auth.user_context(request, db)
-            current = max(1, page_number)
-            total = db.scalar(
-                select(func.count(UserNotification.id)).where(UserNotification.user_id == user.id)
-            ) or 0
-            pages = max(1, (total + 5) // 6)
-            current = min(current, pages)
-            notices = db.scalars(
-                select(UserNotification)
-                .where(UserNotification.user_id == user.id)
-                .order_by(UserNotification.created_at.desc())
-                .offset((current - 1) * 6).limit(6)
-            ).all()
-            return page(
-                request, "notifications.html", title="通知中心", notices=notices,
-                page_number=current, pages=pages, **context,
-            )
-
     @router.post("/notifications/{notification_id}/read")
     def mark_read(
         request: Request, notification_id: str, csrf_token: str = Form(default="")
@@ -224,7 +203,7 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
             if notice is None or notice.user_id != user.id:
                 raise HTTPException(404)
             notice.read_at = datetime.now(timezone.utc)
-        return RedirectResponse("/notifications#notification-list", 303)
+        return RedirectResponse("/messages#notification-list", 303)
 
     @router.get("/email-actions/{token}")
     def email_action(request: Request, token: str):

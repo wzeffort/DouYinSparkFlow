@@ -624,9 +624,9 @@ class WorkerCredentialTests(unittest.IsolatedAsyncioTestCase):
                     recovered_run = session.get(TaskRun, run_id)
                     recovered_task = session.get(SparkTask, task_id)
                     self.assertEqual("failed", recovered_run.status)
-                    self.assertEqual("worker_interrupted", recovered_run.error_code)
+                    self.assertEqual("delivery_uncertain", recovered_run.error_code)
                     self.assertEqual(
-                        now + timedelta(minutes=1),
+                        now + timedelta(days=1),
                         recovered_task.next_run_at.replace(tzinfo=timezone.utc),
                     )
             finally:

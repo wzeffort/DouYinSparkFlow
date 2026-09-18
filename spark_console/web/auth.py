@@ -1,13 +1,16 @@
 from __future__ import annotations
 
 import secrets
+import re
+from threading import Lock
 from datetime import datetime, timezone
 
 from fastapi import HTTPException, Request
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from spark_console.models import User, UserNotification, WebSession
+from spark_console.models import AdminAnnouncement, AnnouncementRecipient, User, UserNotification, WebSession
+from spark_console.services.announcements import AnnouncementService
 from spark_console.security import SessionService
 
 
@@ -18,12 +21,15 @@ def _aware(value: datetime) -> datetime:
 class WebAuth:
     def __init__(self, sessions: SessionService):
         self.sessions = sessions
+        # The deployed Web is a singleton. Credential changes and session issuance
+        # must share this boundary so an old-password login cannot outlive revocation.
+        self.mutation_lock = Lock()
 
     def current(
         self, request: Request, db: Session, allow_change: bool = False
     ) -> tuple[User, WebSession]:
         raw = request.cookies.get("spark_session")
-        if not raw:
+        if not raw or not re.fullmatch(r'[A-Za-z0-9_-]{43}', raw):
             raise HTTPException(401)
         record = db.scalar(
             select(WebSession).where(WebSession.token_hash == self.sessions.token_hash(raw))
@@ -38,17 +44,19 @@ class WebAuth:
         return user, record
 
     def csrf(self, record: WebSession, supplied: str) -> None:
-        if not supplied or not secrets.compare_digest(record.csrf_token, supplied):
+        if not supplied or not supplied.isascii() or not secrets.compare_digest(record.csrf_token, supplied):
             raise HTTPException(403, "CSRF validation failed")
 
     @staticmethod
     def _page_context(db: Session, user: User, record: WebSession) -> dict:
+        AnnouncementService(db).publish_due()
         unread = db.scalar(
             select(func.count(UserNotification.id)).where(
                 UserNotification.user_id == user.id,
                 UserNotification.read_at.is_(None),
             )
         ) or 0
+        unread += db.scalar(select(func.count(AnnouncementRecipient.user_id)).join(AdminAnnouncement).where(AnnouncementRecipient.user_id==user.id,AnnouncementRecipient.read_at.is_(None),AdminAnnouncement.status=='published')) or 0
         return {
             "user": user,
             "csrf_token": record.csrf_token,

@@ -255,8 +255,8 @@ class UserWebTests(unittest.TestCase):
         self.assertEqual(
             {
                 "items": [
-                    {"name": "gsy", "sec_uid": None},
-                    {"name": "我的备注", "sec_uid": "stable-user-id"},
+                    {"name": "我的备注", "sec_uid": "stable-user-id", "aliases": ["我的备注", "新的昵称", "wzlovegsy"], "kind": "contact", "source": "identity"},
+                    {"name": "gsy", "sec_uid": None, "aliases": ["gsy"], "kind": "unknown", "source": "conversation"},
                 ]
             },
             response.json(),

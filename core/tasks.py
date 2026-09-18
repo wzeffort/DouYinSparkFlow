@@ -81,7 +81,13 @@ async def click_first_match(page, selector):
 
 
 async def confirm_message_sent(page, chat_input, message, timeout=15000):
-    """Wait until the editor clears and the sent message appears in the chat."""
+    """Never treat old text or a cleared editor as a delivery receipt.
+
+    The current web-chat adapter has no verified server acknowledgement tied to
+    this send. Callers must retain submitted/uncertain and must not replay it.
+    A future acknowledgement adapter needs its own message/conversation identity
+    checks; whole-page text matches are deliberately not a success fallback.
+    """
     verification_lines = [line.strip() for line in message.splitlines() if line.strip()]
     if not verification_lines:
         raise ValueError("message must contain visible text")
@@ -95,10 +101,7 @@ async def confirm_message_sent(page, chat_input, message, timeout=15000):
         arg=input_handle,
         timeout=timeout,
     )
-    await page.get_by_text(verification_lines[-1], exact=False).last.wait_for(
-        state="visible",
-        timeout=timeout,
-    )
+    raise RuntimeError("No reliable delivery receipt is available for this send")
 
 
 async def retry_operation(name, operation, retries=3, delay=2, *args, **kwargs):

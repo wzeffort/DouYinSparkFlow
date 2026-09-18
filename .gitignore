@@ -15,3 +15,6 @@ runtime/*.json
 *.db-shm
 *.db-wal
 *.key
+artifacts/
+.pytest_cache/
+*.tar.gz

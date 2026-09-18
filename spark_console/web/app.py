@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import json
 import threading
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -10,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 import uvicorn
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from sqlalchemy import func, or_, select
@@ -31,37 +32,58 @@ from spark_console.models import (
     TaskRun,
     User,
     WorkerLock,
+    TaskRunRecipient,
+    TaskRunDiagnostic,
+    TaskQuotaBinding,
+    WebSession,
 )
-from spark_console.rate_limit import FailedAttemptLimiter
+from spark_console.rate_limit import FailedAttemptLimiter, BoundedRequestLimiter
 from spark_console.security import PasswordService, SessionService
 from spark_console.services.accounts import AccountService
+from spark_console.services.contacts import contact_items
 from spark_console.services.audits import AuditService
+from spark_console.services.admin_operations import AdminOperations
+from spark_console.services.manual_retries import ManualRetryService
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.tasks import TaskService
 from spark_console.services.task_capacity import TaskCapacityService
+from spark_console.services.batch_execution import BatchRunService
 from spark_console.services.platform_status import build_platform_status
 from spark_console.services.system_health import load_health_snapshot
+from spark_console.execution_diagnostics import public_trace
 from spark_console.services.users import UserService
 from spark_console.web.account_scan_routes import build_account_scan_router
 from spark_console.web.auth import WebAuth
 from spark_console.web.registration_routes import admin_invite_items, build_registration_router
 from spark_console.web.email_routes import build_email_router
+from spark_console.web.announcement_routes import build_announcement_router
+from spark_console.web.retry_routes import build_retry_router
+from spark_console.web.recipient_review_routes import build_recipient_review_router
+from spark_console.services.user_directory import UserDirectoryService
+from spark_console.web.registration_routes import registration_client_key
+from spark_console.web.security_headers import SecurityBoundaryMiddleware
+from spark_console.web.contact_routes import build_contact_router
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
 
 RUN_STATUS_LABELS = {
+    "partial": "部分成功",
     "running": "执行中",
     "success": "成功",
     "failed": "失败",
     "skipped": "已跳过",
 }
 RUN_STAGE_LABELS = {
+    "batch_complete": "批次完成",
+    "batch_retry": "未发送好友待重试",
+    "batch_interrupted": "批次中断",
     "starting": "准备执行",
     "authenticating": "验证登录",
     "selecting_target": "查找好友",
     "worker_error": "执行异常",
+    "worker_timeout": "执行超时",
     "sending": "发送消息",
     "confirming": "确认送达",
     "submitted": "已提交发送",
@@ -89,11 +111,6 @@ INVITE_STATUS_FILTERS = {
     "expired": "已过期",
     "revoked": "已撤销",
 }
-SAFE_MANUAL_RETRY_CODES = {
-    "network_unavailable",
-    "conversation_not_opened",
-    "target_not_found",
-}
 ADMIN_NOTICES = {
     "task_updated": "任务已保存，下一次执行时间已重新计算",
     "task_toggled": "任务状态已更新",
@@ -116,6 +133,20 @@ def _aware_utc(value):
     if value is None:
         return None
     return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+
+
+def _parse_recipients(value):
+    if not value:
+        return None
+    if len(value) > 20000:
+        raise ValidationError("好友列表内容过长")
+    try:
+        data = json.loads(value)
+    except (ValueError, TypeError):
+        raise ValidationError("好友列表格式无效，请检查后重新提交") from None
+    if not isinstance(data, list):
+        raise ValidationError("好友列表格式无效")
+    return data
 
 
 def _positive_page(value: str | None) -> int:
@@ -190,7 +221,25 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
     auth = WebAuth(sessions)
+
+    @app.middleware('http')
+    async def protect_admin_namespace(request, call_next):
+        if request.url.path == '/admin' or request.url.path.startswith('/admin/'):
+            with session_scope(engine) as db:
+                try:
+                    user, _record = auth.current(request, db)
+                except HTTPException as error:
+                    if error.status_code in (401,409):
+                        return RedirectResponse('/login' if error.status_code==401 else '/change-password',303)
+                    return JSONResponse({'detail':'Access denied'},status_code=error.status_code)
+                if user.role!='admin':return JSONResponse({'detail':'Not found'},status_code=404)
+        return await call_next(request)
+    app.add_middleware(SecurityBoundaryMiddleware, secure_cookies=settings.secure_cookies)
+    app.include_router(build_contact_router(engine, auth))
     registration_limiter = FailedAttemptLimiter()
+    login_ip_limiter = BoundedRequestLimiter()
+    login_global_limiter = BoundedRequestLimiter(limit=60, window_seconds=60)
+    login_lock = auth.mutation_lock
     cipher = CookieCipher(settings.cookie_key_file.read_bytes())
     pii = (
         PiiCipher(settings.pii_key_file.read_bytes())
@@ -337,20 +386,20 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         now = datetime.now(timezone.utc)
         capacity = TaskCapacityService(db, AuditService(db))
         capacity.reconcile_all(now)
+        for ordinary in db.scalars(select(User).where(User.role != "admin")):
+            capacity.bootstrap_user(ordinary, effective_at=now)
         query = request.query_params.get("q", "").strip()[:80]
-        statement = select(User).order_by(User.created_at, User.username)
-        if query:
-            statement = statement.where(func.lower(User.username).like(f"%{query.lower()}%"))
-        rows = list(db.scalars(statement).all())
+        status_filter = request.query_params.get("status", "")
+        if status_filter not in {'account_invalid','email_unverified','quota_expiring','quota_expired','disabled'}: status_filter = ''
+        rows = UserDirectoryService(db).rows(status_filter, query, now)
         users, user_page = _page_info(
             rows, _positive_page(request.query_params.get("page")), 8
         )
-        summaries = {item.id: capacity.summary_for(item, now) for item in users}
         return {
             "users": users,
             "user_page": user_page,
             "user_q": query,
-            "user_quota_summaries": summaries,
+            "user_status": status_filter,
             "notice_message": ADMIN_NOTICES.get(request.query_params.get("notice", "")),
         }
 
@@ -361,6 +410,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         )
     )
     app.include_router(build_account_scan_router(engine, auth, cipher))
+    app.include_router(build_announcement_router(engine, auth, page))
+    app.include_router(build_retry_router(engine, auth, page, task_write_lock))
+    app.include_router(build_recipient_review_router(engine, auth, page, task_write_lock))
     if pii is not None:
         app.include_router(build_email_router(engine, auth, passwords, pii, page))
 
@@ -368,11 +420,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     async def unauthorized(request: Request, _exc):
         return RedirectResponse("/login", status_code=303)
 
+    @app.exception_handler(NotFound)
+    async def resource_not_found(_request: Request, _exc):
+        return JSONResponse({'detail':'Not found'},status_code=404)
+
     @app.exception_handler(409)
     async def change_required(request: Request, exc):
         if exc.detail == "password-change-required":
             return RedirectResponse("/change-password", status_code=303)
-        return page(request, "error.html", status_code=409, message="请求冲突")
+        return page(request, "error.html", status_code=409, nav=False, title='请求冲突', message="此操作已提交或状态发生变化，请刷新页面查看结果后再操作")
 
     @app.get("/health/live")
     def live():
@@ -397,21 +453,65 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.post("/login")
     def login(request: Request, username: str = Form(), password: str = Form()):
+        def throttled():
+            return page(request, "login.html", 429, title="登录", nav=False,
+                        error="尝试过于频繁，请稍后再试")
+
+        if not login_ip_limiter.allow(registration_client_key(request)) or not login_global_limiter.allow('login'):
+            response = throttled()
+            response.headers['Retry-After'] = '600'
+            return response
+        # Serialize login verification and account counters without queuing hash work.
+        if not login_lock.acquire(blocking=False):
+            response = throttled()
+            response.headers['Retry-After'] = '5'
+            return response
+        try:
+            return login_locked(request, username, password)
+        finally:
+            login_lock.release()
+
+    def login_locked(request, username, password):
         with session_scope(engine) as db:
-            user = db.scalar(select(User).where(User.username == username.strip().lower()))
+            identifier = username.strip().lower()
+            user = db.scalar(select(User).where(User.username == identifier))
+            if user is None and pii is not None:
+                try:
+                    email_lookup_hash = pii.lookup_hash(identifier)
+                except ValueError:
+                    email_lookup_hash = None
+                if email_lookup_hash is not None:
+                    user = db.scalar(
+                        select(User).where(
+                            User.email_lookup_hash == email_lookup_hash,
+                            User.email_verified_at.is_not(None),
+                        )
+                    )
+            now = datetime.now(timezone.utc)
+            if user is not None and user.locked_until is not None:
+                if _aware_utc(user.locked_until) > now:
+                    response = page(request, "login.html", 429, title="登录", nav=False,
+                                    error="尝试过于频繁，请稍后再试")
+                    response.headers['Retry-After'] = str(max(1, int((_aware_utc(user.locked_until) - now).total_seconds())))
+                    return response
+                user.locked_until = None
+                user.failed_login_count = 0
             valid = user is not None and user.status == "active" and passwords.verify(user.password_hash, password)
             if not valid:
                 if user is not None:
                     user.failed_login_count += 1
+                    if user.failed_login_count >= 10:
+                        user.locked_until = now + timedelta(minutes=15)
                 return page(
                     request,
                     "login.html",
                     status_code=400,
                     title="登录",
                     nav=False,
-                    error="用户名或密码错误",
+                    error=("用户名、邮箱或密码错误" if pii is not None else "用户名或密码错误"),
                 )
             user.failed_login_count = 0
+            user.locked_until = None
             raw, record = sessions.create_record(user.id)
             db.add(record)
             destination = "/change-password" if user.must_change_password else "/dashboard"
@@ -458,7 +558,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         new_password: str = Form(),
         new_password_confirmation: str = Form(default=""),
     ):
-        with session_scope(engine) as db:
+        with auth.mutation_lock, session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
             auth.csrf(record, csrf_token)
             if not passwords.verify(user.password_hash, current_password):
@@ -500,7 +600,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     error="新密码至少需要 12 位",
                 )
             user.must_change_password = False
-        return RedirectResponse("/dashboard", status_code=303)
+            user.failed_login_count = 0
+            user.locked_until = None
+            db.query(WebSession).filter(WebSession.user_id == user.id).delete(synchronize_session=False)
+            raw, fresh_session = sessions.create_record(user.id)
+            db.add(fresh_session)
+        response = RedirectResponse("/dashboard", status_code=303)
+        response.set_cookie('spark_session', raw, httponly=True, secure=settings.secure_cookies,
+                            samesite='strict', max_age=8 * 3600)
+        return response
 
     @app.get("/dashboard")
     def dashboard(request: Request):
@@ -530,6 +638,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             return {
                 "total": status.total,
                 "success": status.success,
+                "confirmed": status.confirmed,
+                "submitted": status.submitted,
                 "running": status.running,
                 "pending": status.pending,
                 "failed": status.failed,
@@ -558,46 +668,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, _record = auth.current(request, db)
             service = AccountService(db, cipher, AuditService(db))
             service.get_owned(user.id, account_id)
-            conversation_names = db.scalars(
-                select(DouyinConversation.display_name)
-                .where(DouyinConversation.account_id == account_id)
-                .order_by(DouyinConversation.display_name)
-            ).all()
-            contacts = db.scalars(
-                select(DouyinContactIdentity)
-                .where(DouyinContactIdentity.account_id == account_id)
-            ).all()
-            aliases = {
-                value
-                for contact in contacts
-                for value in (
-                    contact.remark_name,
-                    contact.nickname,
-                    contact.unique_id,
-                    contact.short_id,
-                )
-                if value
-            }
-            items = [
-                {
-                    "name": contact.remark_name
-                    or contact.nickname
-                    or contact.unique_id
-                    or contact.short_id,
-                    "sec_uid": contact.sec_uid,
-                }
-                for contact in contacts
-                if contact.remark_name
-                or contact.nickname
-                or contact.unique_id
-                or contact.short_id
-            ]
-            items.extend(
-                {"name": name, "sec_uid": None}
-                for name in conversation_names
-                if name not in aliases
-            )
-            return {"items": sorted(items, key=lambda item: item["name"])}
+            return {"items": contact_items(db, account_id)}
 
     @app.get("/tasks")
     def tasks_page(request: Request):
@@ -652,9 +723,11 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def add_task(
         request: Request,
         csrf_token: str = Form(default=""),
-        account_id: str = Form(), target_name: str = Form(),
+        account_id: str = Form(), target_name: str = Form(default=""),
         target_sec_uid: str = Form(default=""),
-        send_time: str = Form(), message_template: str = Form(),
+        send_time: str = Form(), message_template: str = Form(default=""),
+        recipients_json: str = Form(default=""),
+        draft_revision: str = Form(default=""),
     ):
         with task_write_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
@@ -668,6 +741,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     send_time,
                     message_template,
                     target_sec_uid=target_sec_uid,
+                    recipients=(_parse_recipients(recipients_json) if recipients_json else [dict(
+                        target_name=target_name, target_sec_uid=target_sec_uid, message_template=message_template)]),
                 )
             except (ValidationError, Conflict) as error:
                 account_service = AccountService(
@@ -686,9 +761,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     task_limit=quota_summary["limit"],
                     quota_summary=quota_summary,
                     task_error=str(error),
+                    form=dict(account_id=account_id, send_time=send_time, target_name=target_name,
+                              target_sec_uid=target_sec_uid, message_template=message_template,
+                              recipients_json=recipients_json, draft_revision=draft_revision),
                     **context,
                 )
-        return RedirectResponse("/tasks", status_code=303)
+        destination = "/tasks"
+        if len(draft_revision) == 32 and all(char in "0123456789abcdef" for char in draft_revision):
+            destination += "?" + urlencode({"created_draft": draft_revision})
+        return RedirectResponse(destination, status_code=303)
 
     @app.get("/tasks/{task_id}/edit")
     def edit_task_page(request: Request, task_id: str):
@@ -707,6 +788,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "target_sec_uid": binding.sec_uid if binding else "",
                 "send_time": task.send_time,
                 "message_template": task.message_template,
+                "recipients_json": json.dumps(service.recipients_for(task), ensure_ascii=False),
             }
             return page(
                 request,
@@ -725,10 +807,11 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         task_id: str,
         csrf_token: str = Form(default=""),
         account_id: str = Form(),
-        target_name: str = Form(),
+        target_name: str = Form(default=""),
         target_sec_uid: str = Form(default=""),
         send_time: str = Form(),
-        message_template: str = Form(),
+        message_template: str = Form(default=""),
+        recipients_json: str = Form(default=""),
     ):
         with task_write_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
@@ -745,6 +828,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     send_time,
                     message_template,
                     target_sec_uid=target_sec_uid,
+                    recipients=_parse_recipients(recipients_json),
                 )
             except NotFound as error:
                 raise HTTPException(404) from error
@@ -755,6 +839,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     "target_sec_uid": target_sec_uid,
                     "send_time": send_time,
                     "message_template": message_template,
+                    "recipients_json": recipients_json,
                 }
                 return page(
                     request,
@@ -794,7 +879,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with session_scope(engine) as db:
             user, record = auth.current(request, db)
             auth.csrf(record, csrf_token)
-            TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db)).delete_owned(user.id, task_id)
+            try:
+                TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db)).delete_owned(user.id, task_id)
+            except ValidationError as error:
+                raise HTTPException(400, str(error)) from error
         return RedirectResponse("/tasks", status_code=303)
 
     @app.get("/runs")
@@ -834,6 +922,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "runs.html",
                 title="执行记录",
                 runs=runs,
+                recipient_results={run.id: list(db.scalars(select(TaskRunRecipient).where(
+                    TaskRunRecipient.run_id == run.id).order_by(TaskRunRecipient.position)).all())
+                    for run, _task, _owner, _account in runs},
+                run_diagnostics={run.id: public_trace(db.get(TaskRunDiagnostic, run.id)) for run, _task, _owner, _account in runs} if show_run_owner else {},
                 run_page=run_page,
                 show_run_owner=show_run_owner,
                 **context,
@@ -900,12 +992,28 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             )
 
     @app.post("/admin/users")
-    def admin_create_user(request: Request, csrf_token: str = Form(default=""), username: str = Form()):
-        with session_scope(engine) as db:
+    def admin_create_user(request: Request, csrf_token: str = Form(default=""), username: str = Form(),
+                          monthly_slots: str = Form(default="")):
+        with task_write_lock, session_scope(engine) as db:
             admin, record, context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             service = UserService(db, passwords, AuditService(db))
+            count = None
+            if monthly_slots != "":
+                try:
+                    count = int(monthly_slots)
+                    if not 0 <= count <= 100:
+                        raise ValueError
+                except ValueError:
+                    raise HTTPException(400, "月卡数量须为 0–100") from None
             _user, temporary = service.create(username)
+            if count is not None:
+                capacity = TaskCapacityService(db, AuditService(db))
+                # This new paid account does not also receive the old free policy.
+                for initial in capacity.grants_for(_user.id):
+                    initial.amount = 0
+                if count:
+                    capacity.purchase_monthly(admin.id, _user.id, count)
             return page(
                 request,
                 "admin_users.html",
@@ -917,21 +1025,26 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.post("/admin/users/{user_id}/toggle")
     def admin_toggle_user(request: Request, user_id: str, csrf_token: str = Form(default="")):
-        with session_scope(engine) as db:
+        with auth.mutation_lock, session_scope(engine) as db:
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             user = db.get(User, user_id)
             if user is None:
                 raise HTTPException(404)
-            UserService(db, passwords, AuditService(db)).set_disabled(admin.id, user.id, user.status == "active")
+            try:
+                UserService(db, passwords, AuditService(db)).set_disabled(admin.id, user.id, user.status == "active")
+            except ValidationError as error:raise HTTPException(400,str(error)) from error
         return RedirectResponse("/admin/users", status_code=303)
 
     @app.post("/admin/users/{user_id}/delete")
     def admin_delete_user(request: Request, user_id: str, csrf_token: str = Form(default=""), confirmation: str = Form()):
-        with session_scope(engine) as db:
+        with task_write_lock, session_scope(engine) as db:
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
-            UserService(db, passwords, AuditService(db)).delete(admin.id, user_id, confirmation)
+            try:
+                UserService(db, passwords, AuditService(db)).delete(admin.id, user_id, confirmation)
+            except ValidationError as exc:
+                raise HTTPException(400, detail=str(exc)) from exc
         return RedirectResponse("/admin/users", status_code=303)
 
     @app.post("/admin/quota-policy")
@@ -973,18 +1086,80 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             capacity = TaskCapacityService(db, AuditService(db))
             capacity.reconcile_user(target.id)
             notice = request.query_params.get("notice", "")
+            operations = AdminOperations(db, _record)
+            grants = capacity.grants_for(target.id)
             return page(
                 request,
                 "quota_admin.html",
                 title=f"{target.username} 的任务额度",
                 target=target,
+                purchase_token=operations.issue('quota.purchase:'+target.id),
+                grant_token=operations.issue('quota.add:'+target.id),
+                renewal_tokens={g.id:operations.issue('quota.renew:'+g.id) for g in grants},
+                resume_tokens={g.id:operations.issue('quota.resume:'+g.id) for g in grants},
                 quota_summary=capacity.summary_for(target),
+                bound_tasks={g.id: list(db.scalars(select(SparkTask).join(TaskQuotaBinding,
+                    TaskQuotaBinding.task_id == SparkTask.id).where(TaskQuotaBinding.grant_id == g.id)).all())
+                    for g in capacity.grants_for(target.id)},
                 notice_message=ADMIN_NOTICES.get(notice),
                 now_local=datetime.now(ZoneInfo("Asia/Shanghai")).strftime(
                     "%Y-%m-%dT%H:%M"
                 ),
                 **context,
             )
+
+    @app.post("/admin/users/{user_id}/monthly-slots")
+    @app.post("/admin/users/{user_id}/quota-slots")
+    def admin_monthly_slots(request: Request, user_id: str, csrf_token: str = Form(default=""),
+                            count: int = Form(), days: int = Form(default=30), operation_token: str = Form(default="")):
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _ = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                AdminOperations(db,record).execute(operation_token,'quota.purchase:'+user_id,{'count':count,'days':days},
+                    lambda: TaskCapacityService(db, AuditService(db)).purchase_slots(admin.id, user_id, count, days=days))
+            except (ValidationError, NotFound) as error:
+                raise HTTPException(400, str(error)) from error
+        return RedirectResponse(f"/admin/users/{user_id}/quota?notice=quota_granted", status_code=303)
+
+    @app.post("/admin/quota-grants/{grant_id}/renew")
+    def admin_renew_monthly(request: Request, grant_id: str, csrf_token: str = Form(default=""), days: int = Form(default=30), operation_token: str = Form(default="")):
+        with task_write_lock, session_scope(engine) as db:
+            admin, record, _ = auth.admin_context(request, db)
+            auth.csrf(record, csrf_token)
+            try:
+                grant = db.get(TaskQuotaGrant,grant_id)
+                if grant is None:raise NotFound('quota grant not found')
+                AdminOperations(db,record).execute(operation_token,'quota.renew:'+grant_id,{'days':days},
+                    lambda: TaskCapacityService(db, AuditService(db)).renew_slot(admin.id, grant_id, days=days))
+            except (ValidationError, NotFound) as error:
+                raise HTTPException(400, str(error)) from error
+            user_id = grant.user_id
+        return RedirectResponse(f"/admin/users/{user_id}/quota?notice=quota_updated", status_code=303)
+
+    @app.post('/admin/quota-grants/{grant_id}/resume')
+    def admin_resume_grant_tasks(request: Request, grant_id: str, csrf_token: str = Form(default=''), operation_token: str = Form(default='')):
+        with task_write_lock, session_scope(engine) as db:
+            admin,record,_=auth.admin_context(request,db)
+            auth.csrf(record,csrf_token)
+            grant=db.get(TaskQuotaGrant,grant_id)
+            if grant is None:raise HTTPException(404)
+            def resume():
+                capacity=TaskCapacityService(db,AuditService(db))
+                if not capacity._grant_active(grant,datetime.now(timezone.utc)):
+                    raise ValidationError('此名额尚未生效、已到期或已撤销，请先续期')
+                service=TaskService(db,AccountService(db,cipher,AuditService(db)),AuditService(db))
+                tasks=db.scalars(select(SparkTask).join(TaskQuotaBinding,TaskQuotaBinding.task_id==SparkTask.id).where(
+                    TaskQuotaBinding.grant_id==grant.id,SparkTask.owner_user_id==grant.user_id,SparkTask.enabled.is_(False))).all()
+                for task in tasks:
+                    account=db.get(DouyinAccount,task.douyin_account_id) if task.douyin_account_id else None
+                    if account is None or account.validation_state=='invalid':raise ValidationError('请先完成抖音账号重新登录，再恢复任务')
+                    service.set_enabled(task,True,admin.id)
+            try:
+                AdminOperations(db,record).execute(operation_token,'quota.resume:'+grant_id,{},resume)
+            except ValidationError as error:raise HTTPException(400,str(error)) from error
+            user_id=grant.user_id
+        return RedirectResponse(f'/admin/users/{user_id}/quota?notice=quota_updated',303)
 
     @app.post("/admin/users/{user_id}/quota-grants")
     def admin_add_quota_grant(
@@ -995,20 +1170,23 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         starts_at: str = Form(default=""),
         expires_at: str = Form(default=""),
         label: str = Form(default=""),
+        operation_token: str = Form(default=""),
     ):
         notice = "quota_invalid"
         with task_write_lock, session_scope(engine) as db:
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
             try:
-                TaskCapacityService(db, AuditService(db)).grant(
+                AdminOperations(db,record).execute(operation_token,'quota.add:'+user_id,
+                    {'amount':amount,'start':starts_at,'end':expires_at,'label':label},
+                    lambda: TaskCapacityService(db, AuditService(db)).grant(
                     admin.id,
                     user_id,
                     int(amount),
                     _parse_shanghai_datetime(starts_at, required=True),
                     _parse_shanghai_datetime(expires_at, required=False),
                     label,
-                )
+                ))
                 notice = "quota_granted"
             except (ValueError, ValidationError, NotFound):
                 pass
@@ -1125,6 +1303,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             task = db.get(SparkTask, task_id)
             if task is None:
                 raise HTTPException(404)
+            try:
+                TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db)).assert_not_running(task)
+            except ValidationError as error:
+                raise HTTPException(400, str(error)) from error
             db.delete(task)
             AuditService(db).write(admin.id, "task.deleted", "spark_task", task_id)
         return RedirectResponse(admin_url(request, "task_deleted"), status_code=303)
@@ -1136,26 +1318,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             account = db.get(DouyinAccount, account_id)
             if account is None:
                 raise HTTPException(404)
-            contacts = db.scalars(
-                select(DouyinContactIdentity).where(
-                    DouyinContactIdentity.account_id == account_id
-                )
-            ).all()
-            items = [
-                {
-                    "name": contact.remark_name
-                    or contact.nickname
-                    or contact.unique_id
-                    or contact.short_id,
-                    "sec_uid": contact.sec_uid,
-                }
-                for contact in contacts
-                if contact.remark_name
-                or contact.nickname
-                or contact.unique_id
-                or contact.short_id
-            ]
-            return {"items": sorted(items, key=lambda item: item["name"])}
+            return {"items": contact_items(db, account_id)}
 
     @app.get("/admin/tasks/{task_id}/edit")
     def admin_edit_task_page(request: Request, task_id: str):
@@ -1172,6 +1335,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "target_sec_uid": binding.sec_uid if binding else "",
                 "send_time": task.send_time,
                 "message_template": task.message_template,
+                "recipients_json": json.dumps(TaskService(db, account_service, AuditService(db)).recipients_for(task), ensure_ascii=False),
             }
             return page(
                 request,
@@ -1192,10 +1356,11 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         task_id: str,
         csrf_token: str = Form(default=""),
         account_id: str = Form(),
-        target_name: str = Form(),
+        target_name: str = Form(default=""),
         target_sec_uid: str = Form(default=""),
         send_time: str = Form(),
-        message_template: str = Form(),
+        message_template: str = Form(default=""),
+        recipients_json: str = Form(default=""),
     ):
         with task_write_lock, session_scope(engine) as db:
             admin, record, context = auth.admin_context(request, db)
@@ -1214,6 +1379,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     send_time,
                     message_template,
                     target_sec_uid=target_sec_uid,
+                    recipients=_parse_recipients(recipients_json),
                 )
                 AuditService(db).write(
                     admin.id, "admin.task.updated", "spark_task", task.id
@@ -1225,6 +1391,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     "target_sec_uid": target_sec_uid,
                     "send_time": send_time,
                     "message_template": message_template,
+                    "recipients_json": recipients_json,
                 }
                 return page(
                     request,
@@ -1245,49 +1412,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def admin_retry_run(
         request: Request, run_id: str, csrf_token: str = Form(default="")
     ):
-        now = datetime.now(timezone.utc)
         notice = "retry_not_allowed"
         with task_write_lock, session_scope(engine) as db:
+            if engine.dialect.name == 'sqlite':
+                db.connection().exec_driver_sql('BEGIN IMMEDIATE')
             admin, record, _context = auth.admin_context(request, db)
             auth.csrf(record, csrf_token)
-            run = db.get(TaskRun, run_id)
-            task = db.get(SparkTask, run.task_id) if run else None
-            latest_run_id = (
-                db.scalar(
-                    select(TaskRun.id)
-                    .where(TaskRun.task_id == run.task_id)
-                    .order_by(TaskRun.scheduled_for.desc())
-                    .limit(1)
-                )
-                if run
-                else None
-            )
-            if (
-                run
-                and task
-                and task.enabled
-                and run.status == "failed"
-                and run.error_code in SAFE_MANUAL_RETRY_CODES
-                and latest_run_id == run.id
-            ):
-                current_next = _aware_utc(task.next_run_at)
-                already_scheduled = bool(
-                    current_next
-                    and now < current_next <= now + timedelta(minutes=5)
-                )
-                if already_scheduled:
-                    notice = "retry_already_scheduled"
-                else:
-                    task.next_run_at = TaskCapacityService(
-                        db, AuditService(db)
-                    ).next_available_run_at(now + timedelta(minutes=1), task.id)
-                    AuditService(db).write(
-                        admin.id,
-                        "task.manual_retry_scheduled",
-                        "task_run",
-                        run.id,
-                    )
-                    notice = "retry_scheduled"
+            results = ManualRetryService(db).schedule(admin.id, [run_id])
+            if results and results[0]['scheduled_for']:
+                notice = 'retry_scheduled'
+            elif results and results[0]['reason'] in {'这条记录已经安排过重跑', '今天已有待执行计划', '任务正在执行或排队'}:
+                notice = 'retry_already_scheduled'
         return RedirectResponse(admin_url(request, notice), status_code=303)
 
     return app

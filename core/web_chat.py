@@ -1,9 +1,10 @@
 import asyncio
 import logging
 import os
+import unicodedata
 from dataclasses import dataclass
 from datetime import datetime
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 from utils.logger import setup_logger
 
@@ -12,6 +13,7 @@ WEB_CHAT_URL = "https://www.douyin.com/chat"
 CONVERSATION_ITEM_SELECTOR = ".conversationConversationItemwrapper"
 CONVERSATION_TITLE_SELECTOR = ".conversationConversationItemtitle"
 CHAT_EDITOR_SELECTOR = ".messageEditorimChatEditorContainer"
+CHAT_INPUT_SELECTOR = CHAT_EDITOR_SELECTOR + ' [contenteditable="true"]'
 SEARCH_INPUT_SELECTORS = (
     'input[placeholder="搜索"]',
     'input[placeholder*="搜索"]',
@@ -114,8 +116,187 @@ class TargetNotFoundError(RuntimeError):
     """Raised when the requested friend is absent from the web chat list."""
 
 
+class AmbiguousTargetError(TargetNotFoundError):
+    """Name-only selection cannot safely choose among visible exact matches."""
+
+
+class RecipientNameError(RuntimeError):
+    """The current conversation has not confirmed the selected display name."""
+
+    def __init__(self, diagnostic=None):
+        super().__init__('聊天窗口或输入框尚未就绪；本次未发送，请查看页面状态诊断')
+        self.diagnostic = diagnostic or {}
+
+
+async def verify_chat_recipient_name(page, expected_name, timeout=5000, approved_names=()):
+    """Verify chat readiness after target selection; title differences are advisory.
+
+    The caller still uniquely selects the requested friend. Display names are
+    logged, but neither character overlap nor human approval is required here.
+    """
+    diagnostic = {'reason': 'invalid_target', 'expected_name': '', 'observed_name': '',
+                  'header_count': 0, 'title_count': 0, 'editor_count': 0,
+                  'header_visible': False, 'title_visible': False, 'editor_visible': False}
+    try:
+        if not isinstance(expected_name, str) or not expected_name.strip() or len(expected_name.strip()) > 256:
+            raise RecipientNameError(diagnostic)
+        diagnostic['expected_name'] = expected_name.strip()[:256]
+        location = urlparse(page.url)
+        if (location.scheme, location.netloc, location.path) != ('https', 'www.douyin.com', '/chat'):
+            diagnostic['reason'] = 'wrong_page'
+            raise RecipientNameError(diagnostic)
+        expected_name = expected_name.strip()
+        deadline = asyncio.get_running_loop().time() + timeout / 1000
+        while True:
+            header = page.locator('.RightPanelHeaderconvHeader')
+            editor = page.locator(CHAT_INPUT_SELECTOR)
+            diagnostic.update(reason='page_not_ready', observed_name='', title_count=0,
+                              title_visible=False, header_visible=False, editor_visible=False)
+            diagnostic['header_count'] = await header.count()
+            diagnostic['editor_count'] = await editor.count()
+            diagnostic['header_visible'] = diagnostic['header_count'] == 1 and await header.is_visible()
+            diagnostic['editor_visible'] = diagnostic['editor_count'] == 1 and await editor.is_visible()
+            if diagnostic['header_visible'] and diagnostic['editor_visible']:
+                # Verified against the real chat page; ancillary header buttons
+                # or status badges must never count as the recipient's name.
+                title = header.locator('.RightPanelHeadertitle')
+                diagnostic['title_count'] = await title.count()
+                diagnostic['title_visible'] = diagnostic['title_count'] == 1 and await title.is_visible()
+                if diagnostic['title_visible']:
+                    observed = (await title.inner_text()).strip()
+                    diagnostic['observed_name'] = observed[:256]
+                    diagnostic['reason'] = 'name_mismatch' if observed and len(observed) <= 256 else 'invalid_title'
+                    if observed == expected_name or unicodedata.normalize('NFC', observed) == unicodedata.normalize('NFC', expected_name):
+                        diagnostic['reason'] = 'matched'
+                        return diagnostic
+                    if observed and len(observed) <= 256 and observed in approved_names:
+                        diagnostic['reason'] = 'human_approved'
+                        return diagnostic
+                    if observed and len(observed) <= 256:
+                        diagnostic['reason'] = 'name_difference_allowed'
+                        return diagnostic
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RecipientNameError(diagnostic)
+            await asyncio.sleep(0.1)
+    except RecipientNameError:
+        raise
+    except Exception:
+        diagnostic['reason'] = 'read_error'
+        raise RecipientNameError(diagnostic) from None
+
+
 class WebChatLoginRequiredError(RuntimeError):
     """Raised when the saved web-chat session has returned to a login page."""
+
+
+class RecipientIdentityError(RuntimeError):
+    """The currently open chat cannot be attested to the requested sec_uid."""
+
+
+class ChatReadinessError(RuntimeError):
+    MESSAGES = {
+        'login_expired': '抖音页面要求重新登录；本次未发送',
+        'chat_ui_unavailable': '聊天列表未加载或为空；本批次未进入好友选择，请检查页面加载与登录状态',
+    }
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(self.MESSAGES[code])
+
+
+async def wait_for_chat_ready(page, timeout=30000):
+    """Do not mistake DOMContentLoaded (possibly a blank SPA) for usable chat."""
+    state_script = """() => {
+        const visible = el => !!el.getClientRects().length &&
+            getComputedStyle(el).visibility !== 'hidden';
+        const prompts = ['扫码登录', '手机号登录', '验证码登录'];
+        if ([...document.querySelectorAll('button,span,div')].some(el =>
+            el.children.length === 0 && visible(el) && prompts.includes(el.textContent.trim())))
+            return 'login_expired';
+        if ([...document.querySelectorAll('.conversationConversationItemwrapper')].some(visible))
+            return 'ready';
+        return 'chat_ui_unavailable';
+    }"""
+    try:
+        # The initial app shell can show login controls before stored login state
+        # finishes hydrating. Give it the full readiness budget before invalidation.
+        result = await page.wait_for_function(
+            "() => {const state = (" + state_script + ")(); return state === 'ready' ? state : false;}",
+            timeout=timeout)
+        state = await result.json_value()
+        if state != 'ready':
+            raise ChatReadinessError('chat_ui_unavailable')
+    except ChatReadinessError:
+        raise
+    except Exception:
+        try:
+            state = await page.evaluate(state_script)
+        except Exception:
+            state = 'chat_ui_unavailable'
+        if state == 'login_expired':
+            raise ChatReadinessError('login_expired') from None
+        raise ChatReadinessError('chat_ui_unavailable') from None
+
+
+async def verify_chat_recipient_uid(page, expected_uid: str | None, identities=None) -> None:
+    """Compare the current header's link with the API identity without opening it.
+
+    This automation-owned page suppresses window.open for its entire lifetime.
+    Only a URL generated synchronously by this exact header click is proof;
+    delayed actions, missing API identities and layout changes fail closed.
+    No profile navigation or framework state inspection is performed.
+    """
+    try:
+        if not expected_uid or expected_uid != expected_uid.strip():
+            raise RecipientIdentityError()
+        identity = identities.get(expected_uid) if identities is not None else None
+        if identity is None or identity.sec_uid != expected_uid:
+            raise RecipientIdentityError()
+        location = urlparse(page.url)
+        if location.scheme != 'https' or location.netloc != 'www.douyin.com' or location.path != '/chat':
+            raise RecipientIdentityError()
+        header = page.locator('.RightPanelHeaderconvHeader [data-apm-action="个人页卡片"]')
+        editor = page.locator(CHAT_EDITOR_SELECTOR)
+        if await header.count() != 1 or not await header.is_visible():
+            raise RecipientIdentityError()
+        if await editor.count() != 1 or not await editor.is_visible():
+            raise RecipientIdentityError()
+        probe_script = """el => {
+            const key = '__sparkRecipientUidProbe_v1';
+            let state = window[key];
+            if (!state) {
+                state = {urls: [], active: false};
+                state.block = function(url) {
+                    if (state.active) state.urls.push(String(url));
+                    return null;
+                };
+                window[key] = state;
+                window.open = state.block;
+            }
+            if (window.open !== state.block) throw new Error('probe unavailable');
+            state.urls = [];
+            state.active = true;
+            try { el.click(); } finally { state.active = false; }
+            return state.urls;
+        }"""
+        # The previous editor/header can remain visible while React switches chats.
+        # Wait for UID proof, not merely visibility or a matching display name.
+        deadline = asyncio.get_running_loop().time() + 3.0
+        while True:
+            urls = await header.evaluate(probe_script)
+            if len(urls) != 1:
+                raise RecipientIdentityError()
+            profile = urlparse(urljoin(page.url, urls[0]))
+            if (profile.scheme != 'https' or profile.netloc != 'www.douyin.com'
+                    or not profile.path.startswith('/user/')):
+                raise RecipientIdentityError()
+            if profile.path == '/user/' + expected_uid:
+                return
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RecipientIdentityError()
+            await asyncio.sleep(0.1)
+    except Exception:
+        raise RecipientIdentityError('无法核对当前聊天对象 UID，已停止发送；请重新选择已识别的好友') from None
 
 
 async def page_has_web_chat_login_prompt(page) -> bool:
@@ -185,6 +366,18 @@ async def _wait_for_visible_search_results(page, candidate, timeout_ms):
         await asyncio.sleep(min(0.2, remaining))
 
 
+def _preferred_conversation(matches, candidates):
+    # API aliases put the current remark first. A uniquely matching remark
+    # must not be made ambiguous by another contact's shared nickname.
+    for name in candidates:
+        exact = [pair for pair in matches if pair[1] == name]
+        if len(exact) > 1:
+            raise AmbiguousTargetError('存在多个同名好友，请设置不同的备注后重新选择')
+        if exact:
+            return exact[0]
+    return None
+
+
 async def select_web_chat_target(page, target, timeout=30000, aliases=()):
     """Select one exact target, preferring real conversation rows over page text."""
     normalized_target = target.strip()
@@ -194,6 +387,7 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
         )
     )
 
+    matches = []
     for item in await page.locator(CONVERSATION_ITEM_SELECTOR).all():
         if hasattr(item, "is_visible") and not await item.is_visible():
             continue
@@ -201,8 +395,11 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
             await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
         ).strip()
         if title in candidates:
-            await item.click()
-            return title
+            matches.append((item, title))
+    preferred = _preferred_conversation(matches, candidates)
+    if preferred:
+        await preferred[0].click()
+        return preferred[1]
 
     for selector in SEARCH_INPUT_SELECTORS:
         try:
@@ -215,8 +412,10 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
                 results = await _wait_for_visible_search_results(
                     page, candidate, timeout
                 )
-                for result in results:
-                    await _click_search_result(result)
+                if len(results) > 1:
+                    raise AmbiguousTargetError('搜索结果存在多个同名好友，请设置不同的备注后重新选择')
+                if results:
+                    await _click_search_result(results[0])
                     return candidate
         except (AttributeError, TypeError):
             # Older page doubles and older layouts have no global search surface.
@@ -224,6 +423,7 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
 
     await page.wait_for_selector(CONVERSATION_ITEM_SELECTOR, timeout=timeout)
 
+    matches = []
     for item in await page.locator(CONVERSATION_ITEM_SELECTOR).all():
         if hasattr(item, "is_visible") and not await item.is_visible():
             continue
@@ -231,8 +431,11 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
             await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
         ).strip()
         if title in candidates:
-            await item.click()
-            return title
+            matches.append((item, title))
+    preferred = _preferred_conversation(matches, candidates)
+    if preferred:
+        await preferred[0].click()
+        return preferred[1]
 
     raise TargetNotFoundError(f"未在抖音聊天列表中找到好友 {normalized_target}")
 

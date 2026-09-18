@@ -29,12 +29,12 @@
   }
   function updatePasswordRules() {
     const value = fields.password.value;
-    const states = {length: value.length >= 10, letter: /[A-Za-z]/.test(value), number: /[0-9]/.test(value)};
+    const states = {length: value.length >= 12, letter: /[A-Za-z]/.test(value), number: /[0-9]/.test(value)};
     for (const [rule, valid] of Object.entries(states)) {
       const node = form.querySelector(`[data-password-rule="${rule}"]`);
       if (node) node.dataset.valid = valid ? "true" : "false";
     }
-    const message = !states.length ? "密码至少需要 10 位" : !states.letter ? "密码必须包含至少一个字母" : !states.number ? "密码必须包含至少一个数字" : "";
+    const message = !states.length ? "密码至少需要 12 位" : !states.letter ? "密码必须包含至少一个字母" : !states.number ? "密码必须包含至少一个数字" : "";
     return setError("password", message);
   }
   function validateConfirmation() {

@@ -18,6 +18,7 @@ from spark_console.models import (
 )
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
+from spark_console.services.contacts import merge_contacts
 
 
 class AccountService:
@@ -113,16 +114,6 @@ class AccountService:
                     )
                     .values(read_at=utc_now())
                 )
-            self.session.execute(
-                delete(DouyinConversation).where(
-                    DouyinConversation.account_id == account.id
-                )
-            )
-            self.session.execute(
-                delete(DouyinContactIdentity).where(
-                    DouyinContactIdentity.account_id == account.id
-                )
-            )
         else:
             account = DouyinAccount(
                 owner_user_id=owner_id,
@@ -140,32 +131,7 @@ class AccountService:
                     account_id=account.id, douyin_unique_id=normalized_unique_id
                 )
             )
-        seen = set()
-        for display_name in conversation_names:
-            normalized_name = str(display_name).strip()
-            if not normalized_name or normalized_name in seen:
-                continue
-            seen.add(normalized_name)
-            self.session.add(
-                DouyinConversation(
-                    account_id=account.id,
-                    display_name=normalized_name[:256],
-                )
-            )
-        for identity in contact_identities:
-            sec_uid = str(identity.sec_uid).strip()
-            if not sec_uid:
-                continue
-            self.session.add(
-                DouyinContactIdentity(
-                    account_id=account.id,
-                    sec_uid=sec_uid[:256],
-                    short_id=_limited(identity.short_id, 64),
-                    unique_id=_limited(identity.unique_id, 128),
-                    nickname=_limited(identity.nickname, 256),
-                    remark_name=_limited(identity.remark_name, 256),
-                )
-            )
+        merge_contacts(self.session, account.id, conversation_names, contact_identities)
         self.audit.write(
             owner_id,
             "account.rebound" if reused else "account.created",
@@ -194,14 +160,16 @@ class AccountService:
             raise NotFound("account not found")
         return account
 
-    def list_owned(self, owner_id: str) -> list[dict[str, str]]:
+    def list_owned(self, owner_id: str) -> list[dict[str, str | None]]:
         accounts = self.session.scalars(
             select(DouyinAccount)
             .where(DouyinAccount.owner_user_id == owner_id)
             .order_by(DouyinAccount.created_at)
         ).all()
         return [
-            {"id": item.id, "display_name": item.display_name, "validation_state": item.validation_state}
+            {"id": item.id, "display_name": item.display_name,
+             "validation_state": item.validation_state,
+             "invalid_reason_code": item.invalid_reason_code}
             for item in accounts
         ]
 

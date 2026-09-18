@@ -85,7 +85,7 @@ class MobileNavigationMarkupTests(unittest.TestCase):
             "抖音账号",
             "续火任务",
             "执行记录",
-            "通知中心",
+            "消息中心",
             "邮箱与通知",
             "修改密码",
             "退出登录",

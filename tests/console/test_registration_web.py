@@ -634,7 +634,8 @@ class RegistrationWebTests(unittest.TestCase):
             self.assertEqual(9, grant.amount)
         page = self.client.get("/admin/users")
         self.assertIn(f'/admin/users/{self.friend.id}/quota', page.text)
-        self.assertIn("启用 0/9", page.text)
+        self.assertIn("任务：启用 0/保存 0", page.text)
+        self.assertIn("额度：9", page.text)
 
     def test_admin_can_open_user_quota_timeline_and_add_a_timed_grant(self):
         self.login()

@@ -34,7 +34,7 @@ FIELD_BY_MESSAGE = {
     "该用户名不可用，请更换": "username",
     "请输入有效的邮箱地址": "email",
     "该邮箱不可用，请更换": "email",
-    "密码至少需要 10 位": "password",
+    "密码至少需要 12 位": "password",
     "密码必须包含至少一个字母": "password",
     "密码必须包含至少一个数字": "password",
     "两次输入的密码不一致": "password_confirmation",

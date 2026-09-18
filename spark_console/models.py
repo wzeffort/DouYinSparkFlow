@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from enum import StrEnum
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, LargeBinary, String, Text, text
-from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
 def utc_now() -> datetime:
@@ -141,6 +141,20 @@ class DouyinContactIdentity(Base):
     )
 
 
+class ContactSyncState(Base):
+    __tablename__ = "contact_sync_states"
+
+    account_id: Mapped[str] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="CASCADE"), primary_key=True)
+    request_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    status: Mapped[str] = mapped_column(String(16), nullable=False)
+    slot: Mapped[str | None] = mapped_column(String(16), unique=True)
+    credential_tag: Mapped[str] = mapped_column(String(64), nullable=False)
+    requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    error_code: Mapped[str | None] = mapped_column(String(48))
+    collected_count: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+
+
 class ScanStatus(StrEnum):
     QUEUED = "queued"
     LOADING_QR = "loading_qr"
@@ -259,6 +273,9 @@ class SparkTask(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, onupdate=utc_now)
 
+    recipients: Mapped[list["SparkTaskRecipient"]] = relationship(viewonly=True, order_by="SparkTaskRecipient.position")
+    quota_binding: Mapped["TaskQuotaBinding | None"] = relationship(viewonly=True, uselist=False)
+
 
 class SparkTaskTargetIdentity(Base):
     __tablename__ = "spark_task_target_identities"
@@ -286,6 +303,98 @@ class TaskRun(Base):
     message_digest: Mapped[str | None] = mapped_column(String(64))
 
 
+class TaskRunDiagnostic(Base):
+    __tablename__ = "task_run_diagnostics"
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("task_runs.id", ondelete="CASCADE"), primary_key=True)
+    phase_history: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    current_phase: Mapped[str] = mapped_column(String(32), nullable=False, default="starting")
+    phase_started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    send_started: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ManualRunRetry(Base):
+    __tablename__ = "manual_run_retries"
+
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("task_runs.id", ondelete="CASCADE"), primary_key=True)
+    task_id: Mapped[str] = mapped_column(ForeignKey("spark_tasks.id", ondelete="CASCADE"), nullable=False, index=True)
+    actor_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    recipient_positions: Mapped[str] = mapped_column(Text, nullable=False, default="[]")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class SparkTaskRecipient(Base):
+    __tablename__ = "spark_task_recipients"
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("spark_tasks.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    target_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_sec_uid: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    message_template: Mapped[str] = mapped_column(String(500), nullable=False)
+
+
+class TaskQuotaBinding(Base):
+    __tablename__ = "task_quota_bindings"
+    __table_args__ = (Index("uq_task_quota_position", "grant_id", "position", unique=True),)
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("spark_tasks.id", ondelete="CASCADE"), primary_key=True)
+    grant_id: Mapped[str] = mapped_column(ForeignKey("task_quota_grants.id", ondelete="CASCADE"), nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    grant: Mapped["TaskQuotaGrant"] = relationship(viewonly=True)
+
+
+class TaskRunRecipient(Base):
+    __tablename__ = "task_run_recipients"
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("task_runs.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    target_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    target_sec_uid: Mapped[str] = mapped_column(String(256), nullable=False, default="")
+    message_template: Mapped[str] = mapped_column(String(500), nullable=False)
+    status: Mapped[str] = mapped_column(String(24), nullable=False, default="pending")
+    stage: Mapped[str] = mapped_column(String(24), nullable=False, default="queued")
+    error_code: Mapped[str | None] = mapped_column(String(48))
+    error_summary: Mapped[str | None] = mapped_column(String(240))
+    retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class RecipientCheckEvidence(Base):
+    __tablename__ = "recipient_check_evidence"
+
+    run_id: Mapped[str] = mapped_column(ForeignKey("task_runs.id", ondelete="CASCADE"), primary_key=True)
+    position: Mapped[int] = mapped_column(Integer, primary_key=True)
+    diagnostic_json: Mapped[str] = mapped_column(Text, nullable=False)
+    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
+class RecipientNameApproval(Base):
+    __tablename__ = "recipient_name_approvals"
+
+    id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    account_id: Mapped[str] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="CASCADE"), index=True)
+    target_sec_uid: Mapped[str] = mapped_column(String(256), nullable=False)
+    target_name: Mapped[str] = mapped_column(String(64), nullable=False)
+    selected_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    observed_name: Mapped[str] = mapped_column(String(256), nullable=False)
+    actor_user_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    source_run_id: Mapped[str] = mapped_column(String(36), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class TaskBatchRetry(Base):
+    __tablename__ = "task_batch_retries"
+
+    task_id: Mapped[str] = mapped_column(ForeignKey("spark_tasks.id", ondelete="CASCADE"), primary_key=True)
+    source_run_id: Mapped[str] = mapped_column(ForeignKey("task_runs.id", ondelete="CASCADE"), nullable=False)
+    scheduled_for: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
 class WebSession(Base):
     __tablename__ = "web_sessions"
 
@@ -304,6 +413,16 @@ class WorkerLock(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True, default=1)
     worker_id: Mapped[str | None] = mapped_column(String(64))
     lease_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class AdminOperation(Base):
+    __tablename__ = 'admin_operations'
+    token_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    session_id: Mapped[str] = mapped_column(ForeignKey('web_sessions.id', ondelete='CASCADE'), nullable=False, index=True)
+    scope: Mapped[str] = mapped_column(String(160), nullable=False)
+    payload_hash: Mapped[str | None] = mapped_column(String(64))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class AuditEvent(Base):
@@ -394,6 +513,31 @@ class UserNotification(Base):
     dedupe_key: Mapped[str] = mapped_column(String(160), nullable=False)
     read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, index=True)
+
+
+class AdminAnnouncement(Base):
+    __tablename__ = "admin_announcements"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
+    created_by_user_id: Mapped[str | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"), index=True)
+    title: Mapped[str] = mapped_column(String(120), nullable=False)
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    audience_type: Mapped[str] = mapped_column(String(16), nullable=False)
+    audience_value: Mapped[str | None] = mapped_column(String(32))
+    preview_session_hash: Mapped[str | None] = mapped_column(String(64), index=True)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft", index=True)
+    scheduled_for: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    published_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    withdrawn_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+    recipients: Mapped[list["AnnouncementRecipient"]] = relationship(cascade="all, delete-orphan", back_populates="announcement")
+
+
+class AnnouncementRecipient(Base):
+    __tablename__ = "announcement_recipients"
+    announcement_id: Mapped[str] = mapped_column(ForeignKey("admin_announcements.id", ondelete="CASCADE"), primary_key=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
+    read_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    announcement: Mapped[AdminAnnouncement] = relationship(back_populates="recipients")
 
 
 class NotificationEvent(Base):

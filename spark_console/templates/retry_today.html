@@ -1,0 +1,18 @@
+{% extends "base.html" %}{% block content %}
+<header class="page-head compact-page-head"><div><h1>{{ '重跑安排结果' if result else '重跑今日失败' }}</h1><p>{{ day }} · 北京时间</p></div><a class="button quiet" href="/runs">返回执行记录</a></header>
+<section class="panel">
+{% set eligible = entries|selectattr('eligible')|list %}
+{% if result %}
+  <h2>{{ '这次请求已经处理，请勿重复提交' if already_submitted else '已完成重跑检查' }}</h2>
+  <p>已安排 {{ entries|selectattr('scheduled_for')|list|length }} 个任务。任务会按空闲时段依次执行，结果进入执行记录。</p>
+{% else %}
+  <h2>可重跑 {{ eligible|length }} 个任务 · 跳过 {{ entries|length - eligible|length }} 个任务</h2>
+  <p class="muted">只包含明确未发送的好友，已提交的部分不会重发。确认时会再次检查账号、额度和任务状态。</p>
+{% endif %}
+<div class="retry-entry-list">
+{% for entry in entries %}<article class="retry-entry"><div><strong>{{ entry.username }} · {{ entry.target_name }}</strong><p>{% if entry.scheduled_for %}安排时间：{{ entry.scheduled_for|shanghai_time }}{% elif entry.eligible %}重跑 {{ entry.recipient_count }} 位好友{% if entry.preserved_count %} · 另 {{ entry.preserved_count }} 位不重发{% endif %}{% else %}{{ entry.reason }}{% endif %}</p></div><span class="pill {{ 'good' if entry.scheduled_for else ('warn' if entry.eligible else 'off') }}">{{ '已安排' if entry.scheduled_for else ('可重跑' if entry.eligible else '跳过') }}</span></article>{% else %}<div class="empty"><h3>今天没有需要重跑的失败任务</h3></div>{% endfor %}
+</div>
+{% if not result and eligible %}<form method="post" action="/admin/runs/retry-today" data-once><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="operation_token" value="{{ operation_token }}"><input type="hidden" name="day" value="{{ day }}"><input type="hidden" name="run_ids" value="{{ run_ids }}"><button>确认重跑 {{ eligible|length }} 个任务</button></form>{% endif %}
+{% if result %}<a class="compact-link" href="/admin/runs/retry-today">重新查看今日失败任务</a>{% endif %}
+</section>
+{% endblock %}
