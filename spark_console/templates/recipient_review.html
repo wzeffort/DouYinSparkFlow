@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head"><div><h1>好友名称诊断</h1><p>账号：{{ account.display_name if account else '原账号已删除' }} · 好友：{{ item.target_name }}</p><p>{{ run.scheduled_for|shanghai_time }}</p></div><a href="/runs">返回执行记录</a></header>
+{% if notice %}<p class="notice" role="status">{{ notice }}</p>{% endif %}
+<section class="panel recipient-review-panel">
+  <h2>本次检查证据</h2>
+  {% if evidence %}
+  <p>{{ evidence.reason_label }}</p>
+  <dl>
+    <dt>选中会话的名称</dt><dd><bdi>{{ evidence.expected_name }}</bdi></dd>
+    <dt>聊天顶部实际标题</dt><dd><bdi>{{ evidence.observed_name or '未读取到' }}</bdi></dd>
+    <dt>页面状态</dt><dd>标题区域 {{ evidence.header_count }} 个（可见：{{ '是' if evidence.header_visible else '否' }}）；名称 {{ evidence.title_count }} 个（可见：{{ '是' if evidence.title_visible else '否' }}）；输入框 {{ evidence.editor_count }} 个（可见：{{ '是' if evidence.editor_visible else '否' }}）</dd>
+  </dl>
+  <details><summary>查看特殊字符与不可见字符</summary>
+    <p>选中名称：<code class="recipient-code">{{ evidence.expected_name_escaped }}</code></p>
+    <p><code class="recipient-code">{{ evidence.expected_name_codepoints }}</code></p>
+    <p>实际标题：<code class="recipient-code">{{ evidence.observed_name_escaped }}</code></p>
+    <p><code class="recipient-code">{{ evidence.observed_name_codepoints }}</code></p>
+  </details>
+  {% else %}
+  <p>此历史记录没有保存名称诊断，无法还原当时的标题或截图。新的执行会记录名称和页面状态；不能据此直接确认。</p>
+  {% endif %}
+  <p>日志仅保留名称及检查状态，不包含聊天内容、Cookie 或登录凭据。</p>
+</section>
+<section class="panel">
+  <h2>当前发送规则</h2>
+  <p>成功选中任务里的好友、聊天窗口和输入框就绪后，即使标题名称不同也继续发送。名称差异仅记录，不要求人工确认，也不要求有相同字符。</p>
+  <p>找不到所选好友、出现多个匹配，或聊天页面未就绪时仍会停止；不会用单个相同字符搜索并选择其他好友。</p>
+  {% if approval and not approval.revoked_at %}
+  <details><summary>历史人工确认记录</summary><p>曾确认这组名称；当前规则无需依赖该确认。</p><form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet" name="action" value="revoke">撤销历史确认</button></form></details>
+  {% endif %}
+</section>
+{% if item.status == 'failed' and item.stage in ('selecting_target','authenticating','not_started','queued','starting') %}
+<section class="panel">
+  <h2>补跑本次失败</h2>
+  <p>仅安排此好友，不重发已经成功、提交或结果不明的好友。仅今天最新且任务未改动的记录可补跑；已有重试排队时不会重复安排。</p>
+  <p>查看诊断本身不会新增发送任务。点击下面按钮将安排实际补跑。</p>
+  <form method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button name="action" value="retry">仅补跑这位未发送好友</button></form>
+</section>
+{% endif %}
+{% endblock %}

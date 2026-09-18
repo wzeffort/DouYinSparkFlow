@@ -1,13 +1,25 @@
 {% extends "base.html" %}{% block content %}
-<header class="page-head"><div><span class="eyebrow">QUOTA TIMELINE</span><h1>{{ target.username }} 的额度时间轴</h1><p>所有额度都由时间范围决定；到期或撤销后，超额任务会自动暂停但不会删除。</p></div><a class="button quiet" href="/admin#users">返回用户管理</a></header>
+<header class="page-head"><div><span class="eyebrow">QUOTA TIMELINE</span><h1>{{ target.username }} 的额度时间轴</h1><p>所有额度都由时间范围决定；到期或撤销后，超额任务会自动暂停但不会删除。</p></div><a class="button quiet" href="/admin/users">返回用户管理</a></header>
 {% if notice_message %}<div class="notice" role="status">{{ notice_message }}</div>{% endif %}
 <section class="quota-overview">
   <article><span>启用任务</span><strong>{{ quota_summary.active_usage }}/{{ quota_summary.limit }}</strong></article>
   <article><span>保存任务</span><strong>{{ quota_summary.saved_usage }}/{{ quota_summary.max_saved_tasks }}</strong></article>
 </section>
 <section class="panel quota-create-panel">
+  <div class="section-head"><div><h2>开通任务卡</h2><p>一个名额对应一个任务、最多 5 位好友。从现在开始计时，每个名额独立保存。</p></div></div>
+  <form method="post" action="/admin/users/{{ target.id }}/quota-slots" class="quota-preset-form" data-once>
+    <input type="hidden" name="operation_token" value="{{ purchase_token }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>开通数量<input type="number" name="count" min="1" max="100" value="1" required></label>
+    <div class="quota-card-actions" aria-label="选择开通时长">{% for days, label in [(7, '周卡'), (30, '月卡'), (90, '季卡')] %}<button type="submit" name="days" value="{{ days }}">开通 {{ days }} 天{{ label }}</button>{% endfor %}</div>
+  </form>
+  <p class="field-hint">上方按钮增加新名额；给现有任务续费，请使用下方名额中的续期按钮。周卡 7 天、月卡 30 天、季卡 90 天，均按固定天数计算。</p>
+  <p class="field-hint">未到期续费：在原到期日后顺延；已到期续费：从现在开始。已暂停任务需手动启用，续费不会补发过期期间的消息。</p>
+</section>
+<details class="panel quota-create-panel"><summary>高级：添加自定义额度（保留原有管理方式）</summary>
   <div class="section-head"><div><h2>添加额度</h2><p>到期时间留空表示长期有效；所有时间按北京时间填写。</p></div></div>
-  <form method="post" action="/admin/users/{{ target.id }}/quota-grants" class="quota-grant-form">
+  <form method="post" action="/admin/users/{{ target.id }}/quota-grants" class="quota-grant-form" data-once>
+    <input type="hidden" name="operation_token" value="{{ grant_token }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
     <label>额度名称<input name="label" maxlength="64" placeholder="例如：两个月体验额度" required></label>
     <label>增加数量<input type="number" name="amount" min="1" max="100" value="5" required></label>
@@ -15,11 +27,20 @@
     <label>到期时间<input type="datetime-local" name="expires_at"><small class="field-hint">留空表示长期有效</small></label>
     <button>添加额度</button>
   </form>
-</section>
+</details>
 <section class="quota-timeline" aria-label="额度时间轴">
 {% for item in quota_summary.grants %}
   <article class="panel quota-grant-card quota-{{ item.status }}">
     <header><div><span class="pill {{ 'good' if item.status == 'active' else ('warn' if item.status in ('future','expiring') else 'off') }}">{{ {'active':'生效中','expiring':'即将到期','future':'未开始','expired':'已到期','revoked':'已撤销'}[item.status] }}</span><h2>{{ item.grant.label }}</h2></div><strong>+{{ item.grant.amount }}</strong></header>
+    <p class="field-hint">关联任务：{% for task in bound_tasks.get(item.grant.id, []) %}{{ task.target_name }} · 每天 {{ task.send_time }}（{{ '已启用' if task.enabled else '已暂停' }}）{% if not loop.last %}；{% endif %}{% else %}尚未分配{% endfor %}</p>
+    {% if item.grant.expires_at and item.status != 'revoked' %}<p class="field-hint">整组续期：保留 {{ item.grant.amount }} 个名额，统一延长到期日。</p><div class="quota-card-actions" aria-label="续期当前名额">{% for days, label in [(7, '周卡'), (30, '月卡'), (90, '季卡')] %}<form method="post" action="/admin/quota-grants/{{ item.grant.id }}/renew" data-once data-confirm="确认为本组 {{ item.grant.amount }} 个名额续期 {{ days }} 天（{{ label }}）？数量不变；未到期从原到期日延长，已过期从现在开始。"><input type="hidden" name="operation_token" value="{{ renewal_tokens[item.grant.id] }}"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="days" value="{{ days }}"><button class="quiet">续期 {{ days }} 天 · {{ label }}</button></form>{% endfor %}</div>{% endif %}
+    {% set paused = bound_tasks.get(item.grant.id, [])|rejectattr('enabled')|list %}
+    {% if paused and item.status in ('active','expiring') %}
+    <form method="post" action="/admin/quota-grants/{{ item.grant.id }}/resume" data-once data-confirm="确认恢复上方列出的 {{ paused|length }} 个暂停任务？只安排下一次执行，不补发过去的消息。">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="operation_token" value="{{ resume_tokens[item.grant.id] }}">
+      <button class="quiet">恢复本组 {{ paused|length }} 个暂停任务</button>
+    </form>
+    {% endif %}
     <form method="post" action="/admin/quota-grants/{{ item.grant.id }}/edit" class="quota-grant-form">
       <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
       <label>名称<input name="label" maxlength="64" value="{{ item.grant.label }}" required></label>
@@ -28,7 +49,7 @@
       <label>到期<input type="datetime-local" name="expires_at" value="{{ item.grant.expires_at|datetime_local }}"></label>
       <button class="quiet"{% if item.status == 'revoked' %} disabled{% endif %}>保存修改</button>
     </form>
-    {% if item.status != 'revoked' %}<form method="post" action="/admin/quota-grants/{{ item.grant.id }}/revoke" class="quota-revoke-form" onsubmit="return confirm('撤销后超额任务会立即暂停，确定继续？')"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet">撤销额度</button></form>{% endif %}
+    {% if item.status != 'revoked' %}<form method="post" action="/admin/quota-grants/{{ item.grant.id }}/revoke" class="quota-revoke-form" data-confirm="撤销后超额任务会立即暂停，确定继续？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet">撤销额度</button></form>{% endif %}
   </article>
 {% endfor %}
 </section>

@@ -1,0 +1,90 @@
+{% extends "base.html" %}{% block content %}
+<header class="page-head">
+  <div>
+    <span class="eyebrow">ACCOUNTS</span>
+    <h1>抖音账号</h1>
+    <p>使用抖音 App 扫码绑定，账号信息会在手机确认后自动保存。</p>
+  </div>
+</header>
+
+<div class="split accounts-layout">
+  <section class="panel account-list">
+    <h2>已绑定账号</h2>
+    {% if accounts %}
+      {% for account in accounts %}
+      <article class="item account-item">
+        <div class="account-summary">
+          <strong>{{ account.display_name }}</strong>
+          <p class="muted">验证状态：{{ account.validation_state }}</p>
+        </div>
+        <div class="account-controls">
+          <form method="post" action="/accounts/{{ account.id }}/rename" class="account-rename">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label class="sr-only" for="account-name-{{ account.id }}">新账号备注</label>
+            <input id="account-name-{{ account.id }}" name="display_name" value="{{ account.display_name }}" maxlength="64" required>
+            <button class="quiet" type="submit">修改备注</button>
+          </form>
+          <form method="post" action="/accounts/{{ account.id }}/delete">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="danger quiet" type="submit">删除</button>
+          </form>
+        </div>
+      </article>
+      {% endfor %}
+    {% else %}
+      <div class="empty">
+        <span>◎</span>
+        <h3>暂无账号</h3>
+        <p>从右侧开始扫码绑定。</p>
+      </div>
+    {% endif %}
+  </section>
+
+  <section class="panel scan-entry" data-account-scan data-csrf-token="{{ csrf_token }}">
+    <span class="scan-kicker">DOUYIN APP</span>
+    <h2>绑定新账号</h2>
+    <p class="muted">这里会显示云服务器中的抖音登录页，全平台同一时间处理一个绑定会话。</p>
+    <ol class="scan-steps">
+      <li><span>1</span>打开抖音 App</li>
+      <li><span>2</span>扫描页面二维码</li>
+      <li><span>3</span>在手机上确认登录</li>
+    </ol>
+    <button id="scan-start" type="button">扫码绑定抖音账号</button>
+
+    <dialog id="scan-dialog" class="scan-dialog" aria-labelledby="scan-dialog-title">
+      <div class="scan-dialog-card">
+        <button id="scan-close" class="scan-close quiet" type="button" aria-label="关闭扫码窗口">×</button>
+        <span class="eyebrow">SECURE BINDING</span>
+        <h2 id="scan-dialog-title">云端抖音登录</h2>
+        <div id="scan-stage" class="scan-stage" aria-busy="true">
+          <div class="scan-frame">
+            <img id="scan-qr" class="scan-qr" alt="云端抖音登录页面" hidden>
+            <img id="scan-qr-crop" class="scan-qr-crop" alt="抖音登录二维码" hidden>
+            <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在启动云端登录页</small></div>
+          </div>
+          <div id="scan-mobile-actions" class="scan-mobile-actions" hidden>
+            <p>同一部手机操作：保存二维码后，打开抖音“扫一扫”，从相册选择二维码。也可以使用另一台设备直接扫描。</p>
+            <div>
+              <a id="scan-qr-open" class="quiet button-link" href="#" target="_blank" rel="noopener">打开二维码大图</a>
+              <a id="scan-qr-save" class="button-link" href="#" download="douyin-login-qr.png">保存二维码</a>
+            </div>
+            <small>iPhone 若未直接下载，请打开大图后长按保存。</small>
+          </div>
+          <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
+          <div class="scan-input-row">
+            <label class="sr-only" for="scan-text">短信验证码</label>
+            <input id="scan-text" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{4,8}" placeholder="输入 4–8 位短信验证码">
+            <button id="scan-type" type="button">输入到云端</button>
+          </div>
+          <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
+          <p id="scan-countdown" class="scan-countdown"></p>
+        </div>
+        <div class="scan-dialog-actions">
+          <button id="scan-cancel" class="quiet" type="button">取消绑定</button>
+        </div>
+      </div>
+    </dialog>
+  </section>
+</div>
+<script defer src="/static/account_scan.js?v=20260902-1"></script>
+{% endblock %}

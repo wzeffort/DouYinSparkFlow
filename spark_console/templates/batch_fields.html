@@ -1,0 +1,26 @@
+<section class="batch-composer" data-batch-composer data-viewer-id="{{ user.id }}">
+  <input type="hidden" name="recipients_json" value="{{ form.recipients_json|default('') }}">
+  <p class="field-hint">可选择已保存联系人，或像以前一样输入准确昵称/备注。发送前仍会核对聊天窗口名称；同名对象请先设置不同备注。</p>
+  <div class="section-head"><div><h2>好友与专属消息</h2><p>同一批最多 5 位好友，每人可以发送不同内容。</p></div><strong data-batch-count aria-live="polite">最多 5 位</strong></div>
+  <div data-batch-fallback>
+    <input id="task-target-sec-uid" type="hidden" name="target_sec_uid" value="{{ form.target_sec_uid|default('') }}">
+    <label>目标好友<div class="target-picker"><input id="task-target" name="target_name" value="{{ form.target_name|default('') }}" list="task-target-options" maxlength="64" placeholder="输入准确昵称或备注"><button id="refresh-targets" class="quiet" type="button">读取好友列表</button></div></label>
+    <datalist id="task-target-options"></datalist><small id="target-status" class="field-hint" role="status">选择账号后读取已保存的最近会话</small>
+    <label>消息内容<textarea name="message_template" maxlength="500" rows="3">{{ form.message_template|default('今日火花') }}</textarea></label>
+    <noscript><p class="notice">未启用 JavaScript：可创建单好友任务；编辑多好友任务请启用 JavaScript，以免丢失其他好友。</p></noscript>
+  </div>
+  <div class="batch-enhanced" hidden>
+    <div class="batch-picker">
+      <label>查找联系人<input type="search" data-friend-search placeholder="昵称、备注或抖音号；没找到也可手动添加" autocomplete="off"></label>
+      <div class="actions"><button type="button" class="quiet" data-refresh-friends>从抖音同步最近会话</button><button type="button" class="quiet" data-add-filtered>添加筛选出的联系人</button></div>
+      <small data-friend-status class="field-hint" role="status"></small>
+      <div data-friend-options class="batch-friend-options" aria-label="可选好友"></div>
+      <button type="button" class="quiet" data-add-searched-name hidden>按输入的准确昵称添加</button>
+      <small class="field-hint">已识别联系人优先；群聊和未识别会话放在下方。同步仅覆盖网页可读取的最近会话，不代表完整好友通讯录。</small>
+    </div>
+    <div data-recipient-cards class="batch-recipient-cards"></div>
+    <button type="button" class="quiet" data-add-recipient>＋ 手动添加好友</button>
+    <details class="batch-fill"><summary>快捷填入统一内容（之后仍可逐人修改）</summary><label>统一内容<textarea data-bulk-message maxlength="500" rows="2" placeholder="输入要填入的消息"></textarea></label><button type="button" class="quiet" data-fill-all>填入所有好友</button><small class="field-hint">已有内容会在确认后替换。</small></details>
+    <p data-batch-error role="alert" class="form-error" hidden></p>
+  </div>
+</section>

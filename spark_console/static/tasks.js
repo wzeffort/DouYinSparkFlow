@@ -51,6 +51,7 @@
 })();
 
 (() => {
+  if (document.querySelector('[data-batch-composer]')) return;
   const time = document.querySelector("#task-send-time");
   const status = document.querySelector("#task-slot-status");
   const suggestions = document.querySelector("#task-slot-suggestions");
@@ -82,6 +83,7 @@
         button.textContent = item;
         button.addEventListener("click", () => {
           time.value = item;
+          time.dispatchEvent(new Event('input', {bubbles:true}));
           checkSlot();
         });
         suggestions.appendChild(button);

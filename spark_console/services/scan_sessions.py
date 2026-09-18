@@ -78,7 +78,7 @@ FAILURE_CODES = frozenset(
 )
 
 STATUS_MESSAGES = {
-    ScanStatus.QUEUED: "等待开始扫码",
+    ScanStatus.QUEUED: "等待浏览器空闲及服务器资源恢复，随后加载扫码页面",
     ScanStatus.LOADING_QR: "正在加载二维码",
     ScanStatus.AWAITING_SCAN: "请使用抖音 App 扫码并在手机确认",
     ScanStatus.CONFIRMING: "已扫码；确认后正在抓取并加密保存登录凭证",

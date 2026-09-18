@@ -8,3 +8,6 @@ secrets
 logs
 *.db
 backups
+cloud_sources
+artifacts
+.pytest_cache

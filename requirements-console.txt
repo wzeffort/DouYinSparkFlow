@@ -1,9 +1,10 @@
-fastapi==0.116.1
+fastapi==0.141.1
+starlette==1.6.0
 uvicorn==0.35.0
 Jinja2==3.1.6
-python-multipart==0.0.20
+python-multipart==0.0.31
 SQLAlchemy==2.0.43
 argon2-cffi==25.1.0
-cryptography==45.0.6
+cryptography==50.0.1
 httpx==0.28.1
 tzdata==2025.2

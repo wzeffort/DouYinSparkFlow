@@ -589,7 +589,8 @@ class ServiceTests(unittest.TestCase):
                 ).all()
             ),
         )
-        self.assertIsNone(
+        # A new visible snapshot is incomplete evidence: old identities survive.
+        self.assertIsNotNone(
             self.session.get(DouyinContactIdentity, (account.id, "old-contact"))
         )
         self.assertIsNotNone(

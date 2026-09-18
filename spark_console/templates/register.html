@@ -18,16 +18,16 @@
     </label>
     {% endif %}
     <label>密码
-      <input type="password" name="password" autocomplete="new-password" minlength="10" required{% if field_errors.get('password') %} aria-invalid="true" aria-describedby="password-error password-rules"{% endif %}>
+      <input type="password" name="password" autocomplete="new-password" minlength="12" required{% if field_errors.get('password') %} aria-invalid="true" aria-describedby="password-error password-rules"{% endif %}>
       <span id="password-rules" class="password-rules" aria-live="polite">
-        <small data-password-rule="length">至少 10 位</small>
+        <small data-password-rule="length">至少 12 位</small>
         <small data-password-rule="letter">包含字母</small>
         <small data-password-rule="number">包含数字</small>
       </span>
       <small id="password-error" class="field-error" data-field-error="password"{% if not field_errors.get('password') %} hidden{% endif %}>{{ field_errors.get('password', '') }}</small>
     </label>
     <label>确认密码
-      <input type="password" name="password_confirmation" autocomplete="new-password" minlength="10" required{% if field_errors.get('password_confirmation') %} aria-invalid="true" aria-describedby="password-confirmation-error"{% endif %}>
+      <input type="password" name="password_confirmation" autocomplete="new-password" minlength="12" required{% if field_errors.get('password_confirmation') %} aria-invalid="true" aria-describedby="password-confirmation-error"{% endif %}>
       <small id="password-confirmation-error" class="field-error" data-field-error="password_confirmation"{% if not field_errors.get('password_confirmation') %} hidden{% endif %}>{{ field_errors.get('password_confirmation', '') }}</small>
     </label>
     <label>邀请码
@@ -38,5 +38,5 @@
   </form>
   <p class="auth-link">已有账号？<a href="/login">返回登录</a></p>
 </section>
-<script defer src="/static/register.js?v=20260902-1"></script>
+<script defer src="/static/register.js?v=20260906-rules2"></script>
 {% endblock %}

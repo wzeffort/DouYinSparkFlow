@@ -1,0 +1,8 @@
+# Preserve the byte-exact deployed source hashes on Windows and Linux.
+core/** -text
+spark_console/** -text
+utils/** -text
+tests/** -text
+cloud_sources/** -text
+requirements*.txt -text
+Dockerfile.console -text

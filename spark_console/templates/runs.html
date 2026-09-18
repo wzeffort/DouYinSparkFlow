@@ -1,7 +1,8 @@
 {% extends "base.html" %}
 {% block content %}
-<header class="page-head">
-  <div><span class="eyebrow">RUN HISTORY</span><h1>执行记录</h1><p>{% if show_run_owner %}查看所有用户的计划执行结果；{% else %}每次计划执行都会留下结果；{% endif %}错误信息已脱敏。</p></div>
+<header class="page-head compact-page-head">
+  <div><h1>执行记录</h1><p>{{ '全站执行历史' if show_run_owner else '我的执行历史' }} · 每次执行单独记录，包含重试</p></div>
+  <div class="action-row"><span class="record-count">共 {{ run_page.total }} 条记录</span>{% if show_run_owner %}<a class="button" href="/admin/runs/retry-today">重跑今日全部失败</a>{% endif %}</div>
 </header>
 <section class="panel run-panel" id="run-history">
   {% if runs %}
@@ -12,14 +13,26 @@
       <div class="run-main">
         <div class="run-heading">
           <div><time>{{ run.scheduled_for|shanghai_time }}</time><h2>{{ task.target_name }}</h2>{% if show_run_owner %}<p class="run-owner">{{ owner.username }} · {{ account.display_name if account else '未绑定抖音账号' }}</p>{% endif %}</div>
-          <span class="pill {{ 'good' if run.status == 'success' else ('warn' if run.status == 'skipped' else 'off') }}">{{ run.status|run_status }}</span>
+          {% set results = recipient_results.get(run.id, []) if recipient_results else [] %}
+          {% set delivered = (results|selectattr('status','equalto','submitted')|list|length) + (results|selectattr('status','equalto','success')|list|length) %}
+          <span class="pill {{ 'good' if run.status == 'success' else 'warn' }}">{% if run.status == 'success' and (run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or results|selectattr('status','in',['submitted','uncertain'])|list|length) %}已提交{% elif run.status in ('failed','partial') and delivered %}部分完成{{ ' · 重试中' if run.stage == 'batch_retry' else '' }}{% else %}{{ run.status|run_status }}{% endif %}</span>
         </div>
         <dl class="run-meta">
           <div><dt>执行阶段</dt><dd>{{ run.stage|run_stage }}</dd></div>
           <div><dt>开始时间</dt><dd>{{ run.started_at|shanghai_time }}</dd></div>
           <div><dt>完成时间</dt><dd>{{ run.finished_at|shanghai_time }}</dd></div>
         </dl>
-        {% if run.error_summary %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
+        {% set diagnostic = run_diagnostics.get(run.id) if run_diagnostics else none %}
+        {% if show_run_owner and diagnostic %}<details class="batch-run-details"><summary>阶段耗时 · {% if diagnostic.finished or run.finished_at or run.status in ('success','failed','partial','skipped') %}执行已结束{% else %}当前阶段：{{ diagnostic.last_phase }}{% endif %}</summary><ul class="run-diagnostic-list">{% for event in diagnostic.events %}<li>{{ event.label }}{% if event.position is not none %}（本次第 {{ event.position + 1 }} 位好友）{% endif %}<span>{{ event.seconds }} 秒</span></li>{% endfor %}</ul></details>{% endif %}
+        {% if run.error_summary and run.error_code != 'delivery_confirmation_unavailable' and run.stage != 'submitted' %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
+        {% if run.error_code in ('login_expired','cookie_invalid','chat_ui_unavailable') %}
+        <p class="notice">需要重新扫码登录。{% if show_run_owner and owner.id != user.id %}请通知 {{ owner.username }} 在自己的抖音账号页面重新登录。{% else %}<a href="/accounts">前往抖音账号</a>{% endif %}</p>
+        {% elif run.error_code in ('authorization_ended','quota_expired') %}
+        <p class="notice">检查名额有效期和任务是否暂停。<a href="{{ '/admin/users/' ~ owner.id ~ '/quota' if show_run_owner and owner.role != 'admin' else '/tasks' }}">查看额度与任务</a></p>
+        {% elif run.stage == 'selecting_target' or run.error_code in ('recipient_name_unverified','recipient_identity_unverified','target_name_ambiguous','target_not_found') %}
+        <p class="notice">检查好友是否改名或同名，设置不同备注后重新同步、选择好友。<a href="{{ '/admin/tasks/' ~ task.id ~ '/edit' if show_run_owner else '/tasks/' ~ task.id ~ '/edit' }}">检查任务好友</a></p>
+        {% endif %}
+        {% if recipient_results and recipient_results.get(run.id) %}<details class="batch-run-details"><summary>查看每位好友的结果（{{ recipient_results[run.id]|length }} 人）</summary><ul class="batch-task-summary">{% for item in recipient_results[run.id] %}<li><strong>{{ item.target_name }}</strong> <span class="pill">{{ {'pending':'待执行','sending':'发送中','success':'成功','submitted':'已提交','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span><p>{{ item.message_template }}</p>{% if item.error_summary and item.error_code != 'delivery_confirmation_unavailable' %}<small>{{ item.error_summary }}</small>{% endif %}<p><a href="/runs/{{ run.id }}/recipients/{{ item.position }}/review">查看名称诊断{% if item.status == 'failed' %} / 补跑{% endif %}</a></p></li>{% endfor %}</ul></details>{% endif %}
       </div>
     </article>
     {% endfor %}

@@ -6,7 +6,7 @@ import string
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from spark_console.models import DouyinAccount, SparkTask, User, WebSession
+from spark_console.models import DouyinAccount, SparkTask, TaskRun, User, WebSession
 from spark_console.security import PasswordService
 from spark_console.services import Conflict, NotFound, ValidationError
 from spark_console.services.audits import AuditService
@@ -22,8 +22,8 @@ def validate_registration_username(username: str) -> str:
 
 
 def validate_registration_password(password: str) -> None:
-    if len(password) < 10:
-        raise ValidationError("密码至少需要 10 位")
+    if len(password) < 12:
+        raise ValidationError("密码至少需要 12 位")
     if not any(character.isalpha() for character in password):
         raise ValidationError("密码必须包含至少一个字母")
     if not any(character.isdigit() for character in password):
@@ -77,6 +77,7 @@ class UserService:
         return user
 
     def reset_password(self, actor_id: str, user_id: str) -> str:
+        self._require_admin(actor_id)
         user = self.session.get(User, user_id)
         if user is None:
             raise NotFound("user not found")
@@ -88,23 +89,42 @@ class UserService:
         return temporary
 
     def set_disabled(self, actor_id: str, user_id: str, disabled: bool) -> User:
+        self._require_admin(actor_id)
         user = self.session.get(User, user_id)
         if user is None:
             raise NotFound("user not found")
+        if user.role == 'admin':
+            raise ValidationError('管理员账号不能通过用户管理停用')
         user.status = "disabled" if disabled else "active"
+        if disabled:
+            self.session.query(WebSession).filter(WebSession.user_id == user.id).delete()
         self.audit.write(actor_id, "user.disabled" if disabled else "user.enabled", "user", user.id)
         return user
 
     def delete(self, actor_id: str, user_id: str, confirmation: str) -> None:
+        self._require_admin(actor_id)
         user = self.session.get(User, user_id)
         if user is None:
             raise NotFound("user not found")
         if user.id == actor_id:
             raise ValidationError("不能删除当前管理员账号")
+        if user.role == 'admin':
+            raise ValidationError('管理员账号不能通过用户管理删除')
         if confirmation != user.username:
             raise ValidationError("确认用户名不匹配")
+        running = self.session.scalar(select(TaskRun.id).join(SparkTask).where(
+            SparkTask.owner_user_id == user.id,
+            TaskRun.status == "running", TaskRun.finished_at.is_(None),
+        ).limit(1))
+        if running is not None:
+            raise ValidationError("该用户有正在执行的任务，请等待执行结束后再删除")
         self.session.query(SparkTask).filter(SparkTask.owner_user_id == user.id).delete()
         self.session.query(DouyinAccount).filter(DouyinAccount.owner_user_id == user.id).delete()
         self.session.query(WebSession).filter(WebSession.user_id == user.id).delete()
         self.session.delete(user)
         self.audit.write(actor_id, "user.deleted", "user", user_id)
+
+    def _require_admin(self, actor_id):
+        actor = self.session.get(User, actor_id)
+        if actor is None or actor.role != 'admin' or actor.status != 'active':
+            raise NotFound('user not found')

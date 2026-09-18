@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+{% block content %}
+<header class="page-head">
+  <div><span class="eyebrow">RUN HISTORY</span><h1>执行记录</h1><p>{% if show_run_owner %}查看所有用户的计划执行结果；{% else %}每次计划执行都会留下结果；{% endif %}错误信息已脱敏。</p></div>
+</header>
+<section class="panel run-panel" id="run-history">
+  {% if runs %}
+  <div class="run-timeline">
+    {% for run, task, owner, account in runs %}
+    <article class="run-entry run-{{ run.status }}">
+      <span class="run-dot" aria-hidden="true"></span>
+      <div class="run-main">
+        <div class="run-heading">
+          <div><time>{{ run.scheduled_for|shanghai_time }}</time><h2>{{ task.target_name }}</h2>{% if show_run_owner %}<p class="run-owner">{{ owner.username }} · {{ account.display_name if account else '未绑定抖音账号' }}</p>{% endif %}</div>
+          <span class="pill {{ 'good' if run.status == 'success' else ('warn' if run.status == 'skipped' else 'off') }}">{{ run.status|run_status }}</span>
+        </div>
+        <dl class="run-meta">
+          <div><dt>执行阶段</dt><dd>{{ run.stage|run_stage }}</dd></div>
+          <div><dt>开始时间</dt><dd>{{ run.started_at|shanghai_time }}</dd></div>
+          <div><dt>完成时间</dt><dd>{{ run.finished_at|shanghai_time }}</dd></div>
+        </dl>
+        {% if run.error_summary %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
+        {% if recipient_results and recipient_results.get(run.id) %}<details class="batch-run-details"><summary>查看每位好友的结果（{{ recipient_results[run.id]|length }} 人）</summary><ul class="batch-task-summary">{% for item in recipient_results[run.id] %}<li><strong>{{ item.target_name }}</strong> <span class="pill">{{ {'pending':'待执行','sending':'发送中','success':'成功','submitted':'已提交','uncertain':'待核实，勿重发','failed':'未完成'}.get(item.status, item.status) }}</span><p>{{ item.message_template }}</p>{% if item.error_summary %}<small>{{ item.error_summary }}</small>{% endif %}</li>{% endfor %}</ul></details>{% endif %}
+      </div>
+    </article>
+    {% endfor %}
+  </div>
+  {% else %}
+  <div class="empty"><span>◷</span><h3>暂无执行记录</h3><p>任务首次到点后，结果会显示在这里。</p></div>
+  {% endif %}
+  {% if run_page.pages > 1 %}
+  <nav class="admin-pager" aria-label="执行记录分页">
+    <a class="quiet compact-button{% if not run_page.has_previous %} disabled{% endif %}" {% if run_page.has_previous %}href="/runs?page={{ run_page.page - 1 }}#run-history"{% else %}aria-disabled="true"{% endif %}>上一页</a>
+    <span>第 {{ run_page.page }} / {{ run_page.pages }} 页 · 共 {{ run_page.total }} 条</span>
+    <a class="quiet compact-button{% if not run_page.has_next %} disabled{% endif %}" {% if run_page.has_next %}href="/runs?page={{ run_page.page + 1 }}#run-history"{% else %}aria-disabled="true"{% endif %}>下一页</a>
+  </nav>
+  {% elif run_page.total %}<p class="admin-count">共 {{ run_page.total }} 条</p>{% endif %}
+</section>
+{% endblock %}

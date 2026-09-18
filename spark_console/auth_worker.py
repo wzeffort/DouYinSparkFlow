@@ -211,16 +211,10 @@ async def run_loop() -> None:
     try:
         while not stopping.is_set():
             try:
-                await worker.prepare_scanner()
-            except Exception:
-                logger.exception("auth warm slot preparation failed")
-                try:
-                    await asyncio.wait_for(stopping.wait(), timeout=5)
-                except TimeoutError:
-                    continue
-                if stopping.is_set():
-                    break
-            if await worker.run_once(stopping):
+                worked = await worker.run_once(stopping)
+            finally:
+                await worker.close()
+            if worked:
                 continue
             try:
                 await asyncio.wait_for(
@@ -233,4 +227,5 @@ async def run_loop() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run_loop())
+    from spark_console.browser_runtime import run_supervisor
+    run_supervisor('auth')

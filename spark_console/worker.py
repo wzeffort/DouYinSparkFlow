@@ -14,6 +14,7 @@ from spark_console.crypto import CookieCipher
 from spark_console.pii import PiiCipher
 from spark_console.db import create_engine_for, create_schema, session_scope
 from spark_console.executor import DouyinExecutor
+from spark_console.execution_diagnostics import trace_run
 from spark_console.models import (
     DouyinAccount,
     NotificationPreference,
@@ -22,12 +23,14 @@ from spark_console.models import (
     TaskRun,
     User,
     WorkerLock,
+    SparkTaskRecipient,
 )
 from spark_console.scheduler import claim_next_due_task, finish_run
 from spark_console.services.accounts import AccountService
 from spark_console.services.audits import AuditService
 from spark_console.services.task_capacity import TaskCapacityService
 from spark_console.services.notifications import NotificationService
+from spark_console.services.batch_execution import BatchRunService
 
 
 class Worker:
@@ -43,6 +46,7 @@ class Worker:
         clock_offset_seconds=0.0,
         started_at: datetime | None = None,
         execution_timeout_seconds: float | None = None,
+        recovery_at: datetime | None = None,
     ):
         self.settings = settings
         self.engine = engine
@@ -50,6 +54,7 @@ class Worker:
         self.worker_id = f"{socket.gethostname()}-{os.getpid()}"
         self.clock_offset_seconds = clock_offset_seconds
         self.started_at = started_at or datetime.now(timezone.utc)
+        self.recovery_at = recovery_at or self.started_at
         self.execution_timeout_seconds = (
             execution_timeout_seconds or self.EXECUTION_TIMEOUT_SECONDS
         )
@@ -70,21 +75,26 @@ class Worker:
                 )
             ).all()
             for run in interrupted:
+                batch = BatchRunService(db)
+                if batch.rows(run.id):
+                    batch.interrupt(run.id, self.recovery_at)
+                    status, summary, retryable = batch.summary(run.id)
+                    finish_run(run, status, "batch_interrupted", self.recovery_at,
+                               "batch_interrupted" if status != "success" else None, summary)
+                    task = db.get(SparkTask, run.task_id)
+                    if retryable and task and task.enabled:
+                        task.next_run_at = TaskCapacityService(db, AuditService(db)).next_available_run_at(
+                            self.recovery_at + self.RETRY_DELAYS[0], task.id)
+                        batch.remember_retry(task.id, run.id, task.next_run_at)
+                    continue
                 finish_run(
                     run,
                     "failed",
                     "worker_restart",
-                    self.started_at,
-                    "worker_interrupted",
-                    "执行器重启中断了任务，已安排 1 分钟后重试",
+                    self.recovery_at,
+                    "delivery_uncertain",
+                    "执行器中断，旧任务缺少逐好友发送检查点；请核实结果，不会自动重发",
                 )
-                task = db.get(SparkTask, run.task_id)
-                if task is not None and task.enabled:
-                    task.next_run_at = TaskCapacityService(
-                        db, AuditService(db)
-                    ).next_available_run_at(
-                        self.started_at + self.RETRY_DELAYS[0], task.id
-                    )
 
     async def run_once(self, now: datetime | None = None):
         current_time = now or datetime.now(timezone.utc)
@@ -127,6 +137,8 @@ class Worker:
             account = db.get(DouyinAccount, task.douyin_account_id)
             credential_version = account.cookie_version
             target_identity = db.get(SparkTaskTargetIdentity, task.id)
+            is_batch = db.get(SparkTaskRecipient, (task.id, 0)) is not None
+            pending_recipients = BatchRunService(db).prepare(run, task) if is_batch else []
             target_sec_uid = target_identity.sec_uid if target_identity else None
             cookies = account_service.decrypt_for_worker(task.douyin_account_id)
             run_id = run.id
@@ -135,19 +147,28 @@ class Worker:
             target_name = task.target_name
             message_template = task.message_template
 
+        if is_batch:
+            try:
+                return await self._run_batch(run_id, task_id, account_id, cookies,
+                                             credential_version, pending_recipients, current_time)
+            finally:
+                cookies[:] = b"\0" * len(cookies)
+                cookies.clear()
+
         try:
             timed_out = False
             try:
-                result = await asyncio.wait_for(
-                    self.executor.execute(
-                        cookies,
-                        target_name,
-                        message_template,
-                        credential_version=credential_version,
-                        target_sec_uid=target_sec_uid,
-                    ),
-                    timeout=self.execution_timeout_seconds,
-                )
+                with trace_run(self.engine, run_id):
+                    result = await asyncio.wait_for(
+                        self.executor.execute(
+                            cookies,
+                            target_name,
+                            message_template,
+                            credential_version=credential_version,
+                            target_sec_uid=target_sec_uid,
+                        ),
+                        timeout=self.execution_timeout_seconds,
+                    )
             except TimeoutError:
                 timed_out = True
                 result = None
@@ -203,7 +224,7 @@ class Worker:
                 )
             if not result.success and result.retryable:
                 retry = self._schedule_retry(
-                    db, task, run, current_time, result.stage
+                    db, task, run, datetime.now(timezone.utc) if now is None else current_time, result.stage
                 )
                 if retry is not None:
                     return retry
@@ -219,6 +240,70 @@ class Worker:
                 self._record_task_failure_incident(
                     db, task, finished, datetime.now(timezone.utc)
                 )
+            return finished
+
+    async def _run_batch(self, run_id, task_id, account_id, cookies, credential_version, recipients, now):
+        stopped_for_auth = False
+        denied = False
+
+        async def before_send(index):
+            nonlocal denied
+            with session_scope(self.engine) as db:
+                allowed = BatchRunService(db).before_send(run_id, recipients[index]["position"])
+                denied = denied or not allowed
+                return allowed
+
+        async def on_result(index, result):
+            nonlocal stopped_for_auth, denied
+            with session_scope(self.engine) as db:
+                BatchRunService(db).record(run_id, recipients[index]["position"], result)
+                if result.error_code in {"login_expired", "cookie_invalid"}:
+                    stopped_for_auth = True
+                    self._record_auth_incident(db, db.get(DouyinAccount, account_id),
+                                               result.error_code, datetime.now(timezone.utc))
+                if result.error_code == "authorization_ended":
+                    denied = True
+
+        try:
+            if recipients:
+                # Keep the existing three-minute window within the four-minute spacing.
+                with trace_run(self.engine, run_id):
+                    await asyncio.wait_for(self.executor.execute_batch(
+                        cookies, recipients, before_send=before_send, on_result=on_result,
+                        credential_version=credential_version), timeout=self.execution_timeout_seconds)
+        except Exception:
+            # Durable checkpoints decide what is safe, not the exception type.
+            pass
+        with session_scope(self.engine) as db:
+            batch = BatchRunService(db)
+            batch.interrupt(run_id, retry_pending=not (stopped_for_auth or denied))
+            status, summary, retryable = batch.summary(run_id)
+            run, task = db.get(TaskRun, run_id), db.get(SparkTask, task_id)
+            if retryable and task and task.enabled and not stopped_for_auth and not denied:
+                scheduled = self._schedule_retry(db, task, run, datetime.now(timezone.utc), "batch_retry")
+                if scheduled is not None:
+                    batch.remember_retry(task_id, run_id, task.next_run_at)
+                    scheduled.error_summary = summary + "；仅重试明确未发送的好友"
+                    return scheduled
+            rows = batch.rows(run_id)
+            chat_unavailable = bool(rows) and all(
+                row.error_code == "chat_ui_unavailable" for row in rows
+            )
+            if chat_unavailable:
+                self._record_auth_incident(
+                    db,
+                    db.get(DouyinAccount, account_id),
+                    "chat_ui_unavailable",
+                    datetime.now(timezone.utc),
+                )
+                summary = "聊天页连续无法加载，账号已暂停，请重新绑定后恢复任务"
+            missing = [r.target_name for r in rows if r.error_code == "target_not_found"]
+            finished = finish_run(run, status, "batch_complete", datetime.now(timezone.utc),
+                                 "chat_ui_unavailable" if chat_unavailable else
+                                 "target_not_found" if missing else None if status == "success" else "batch_partial", summary)
+            if status in {"failed", "partial"}:
+                self._record_task_failure_incident(db, task, finished, datetime.now(timezone.utc),
+                                                  target_label="、".join(missing)[:120] if missing else None)
             return finished
 
     def _record_auth_incident(
@@ -278,8 +363,9 @@ class Worker:
         task: SparkTask,
         run: TaskRun,
         now: datetime,
+        target_label: str | None = None,
     ) -> None:
-        if self.pii is None or run.status != "failed":
+        if self.pii is None or run.status not in {"failed", "partial"}:
             return
         recent = db.scalars(
             select(TaskRun)
@@ -288,7 +374,7 @@ class Worker:
         ).all()
         streak = []
         for candidate in recent:
-            if candidate.status != "failed":
+            if candidate.status not in {"failed", "partial"}:
                 break
             streak.append(candidate)
         if not streak:
@@ -330,7 +416,7 @@ class Worker:
             email,
             "task_failure",
             {
-                "target_name": task.target_name,
+                "target_name": target_label or task.target_name,
                 "reason": reason,
                 "action_path": action_path,
             },
@@ -391,4 +477,5 @@ async def run_loop() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(run_loop())
+    from spark_console.browser_runtime import run_supervisor
+    run_supervisor('worker')

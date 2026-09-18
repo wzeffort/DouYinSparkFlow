@@ -16,6 +16,7 @@ from spark_console.models import (
     TaskRun,
     User,
     UserTaskQuota,
+    TaskQuotaBinding,
 )
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
@@ -26,6 +27,7 @@ MAX_TASK_LIMIT = 100
 MIN_SAVED_TASKS = 1
 MAX_SAVED_TASKS = 500
 SLOT_MINUTES = 4
+CARD_TERMS = {7: "周卡", 30: "月卡", 90: "季卡"}
 MINUTES_PER_DAY = 24 * 60
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 
@@ -41,6 +43,83 @@ class TaskCapacityService:
     def __init__(self, session: Session, audit: AuditService):
         self.session = session
         self.audit = audit
+
+    def purchase_monthly(self, actor_id, user_id, count, at=None):
+        return self.purchase_slots(actor_id, user_id, count, days=30, at=at)
+
+    def purchase_slots(self, actor_id, user_id, count, *, days=30, at=None):
+        if type(days) is not int or days not in CARD_TERMS:
+            raise ValidationError("请选择 7 天周卡、30 天月卡或 90 天季卡")
+        if type(count) is not int or not 1 <= count <= 100:
+            raise ValidationError("卡片名额数量须为 1–100")
+        now = self._aware(at or datetime.now(timezone.utc))
+        return [self.grant(actor_id, user_id, 1, now, now + timedelta(days=days), f"{days} 天任务{CARD_TERMS[days]}")
+                for _ in range(count)]
+
+    def renew_monthly(self, actor_id, grant_id, at=None):
+        return self.renew_slot(actor_id, grant_id, days=30, at=at)
+
+    def renew_slot(self, actor_id, grant_id, *, days=30, at=None):
+        if type(days) is not int or days not in CARD_TERMS:
+            raise ValidationError("请选择 7 天周卡、30 天月卡或 90 天季卡")
+        actor = self.session.get(User, actor_id)
+        grant = self.session.get(TaskQuotaGrant, grant_id)
+        if actor is None or actor.role != "admin" or grant is None:
+            raise NotFound("quota grant not found")
+        if grant.amount < 1 or grant.expires_at is None or grant.revoked_at is not None:
+            raise ValidationError("仅支持对未撤销的限时名额续期")
+        now = self._aware(at or datetime.now(timezone.utc))
+        grant.expires_at = max(now, self._aware(grant.expires_at)) + timedelta(days=days)
+        self.session.flush()
+        self.audit.write(actor_id, "quota.monthly_renewed" if days == 30 else "quota.slot_renewed",
+                         "task_quota_grant", grant.id, detail=f"days={days};expires_at={grant.expires_at.isoformat()}")
+        return grant
+
+    def _grant_active(self, grant, at):
+        return bool(grant and grant.revoked_at is None and self._aware(grant.starts_at) <= at
+                    and (grant.expires_at is None or self._aware(grant.expires_at) > at))
+
+    def task_authorized(self, task, at=None):
+        now = self._aware(at or datetime.now(timezone.utc))
+        owner = self.session.get(User, task.owner_user_id)
+        if owner is None or owner.status != "active":
+            return False
+        if owner.role == "admin":
+            return True
+        binding = self.session.get(TaskQuotaBinding, task.id)
+        if binding is None:
+            return bool(self.limit_for(owner, now))
+        grant = self.session.get(TaskQuotaGrant, binding.grant_id)
+        return bool(self._grant_active(grant, now) and grant.user_id == owner.id and binding.position < grant.amount)
+
+    def bind_task(self, task, at=None):
+        owner = self.session.get(User, task.owner_user_id)
+        if owner.role == "admin":
+            return
+        now = self._aware(at or datetime.now(timezone.utc))
+        existing = self.session.get(TaskQuotaBinding, task.id)
+        if existing:
+            if not self.task_authorized(task, now):
+                raise ValidationError("此任务绑定的名额已到期或失效，请续期后再启用")
+            return
+        grants = [g for g in self.grants_for(owner.id) if self._grant_active(g, now)]
+        grants.sort(key=lambda g: (self._aware(g.expires_at) if g.expires_at else datetime.max.replace(tzinfo=timezone.utc), g.id))
+        for grant in grants:
+            bindings = self.session.scalars(select(TaskQuotaBinding).where(TaskQuotaBinding.grant_id == grant.id)).all()
+            occupied = set()
+            for bound in bindings:
+                old_task = self.session.get(SparkTask, bound.task_id)
+                if old_task and old_task.enabled:
+                    occupied.add(bound.position)
+                else:
+                    self.session.delete(bound)
+            self.session.flush()
+            for position in range(grant.amount):
+                if position not in occupied:
+                    self.session.add(TaskQuotaBinding(task_id=task.id, grant_id=grant.id, position=position))
+                    self.session.flush()
+                    return
+        raise ValidationError("没有可用任务名额，请联系管理员开通或续期")
 
     @staticmethod
     def _aware(value: datetime) -> datetime:
@@ -360,7 +439,9 @@ class TaskCapacityService:
                 .order_by(SparkTask.created_at, SparkTask.id)
             ).all()
         )
-        excess = enabled[limit:]
+        expired = [task for task in enabled if not self.task_authorized(task, at)]
+        available = [task for task in enabled if task not in expired]
+        excess = expired + available[limit:]
         for task in excess:
             task.enabled = False
             task.next_run_at = None
