@@ -1,6 +1,8 @@
 # DouYin Spark Flow
 
-> 2026-09-18 云端源码归档：本分支以线上运行代码为准。四个服务存在版本差异，已通过校验清单与差异源码保留；根目录是整合工作区，不代表四个服务的统一部署版本。详见 [源码来源、验证与导出说明](cloud_sources/README.md)。本次仅交付代码，未部署服务器；现有 Compose 文件仍是模板。
+<img width="2488" height="1155" alt="image" src="https://github.com/user-attachments/assets/d6ca84ec-b5d7-4198-8d92-22bbce5670ec" />
+
+<img width="1196" height="841" alt="image" src="https://github.com/user-attachments/assets/40b4fa30-94e8-464a-9378-fe896478a166" />
 
 DouYin Spark Flow 是一个面向个人与小型团队的抖音火花自动续火项目。项目通过浏览器自动化完成账号登录、好友选择和定时消息发送，并提供可视化控制台统一管理账号、任务与执行记录。
 
