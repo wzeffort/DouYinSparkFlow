@@ -104,27 +104,32 @@
       const fallbackInput = document.createElement('input'); fallbackInput.maxLength = 200;
       fallbackInput.value = spec.fallback || '今日火花，祝你今天开心！'; fallbackLabel.append(fallbackInput);
       const hint = document.createElement('p'); hint.className = 'field-hint';
-      const preview = document.createElement('p'); preview.className = 'field-hint'; preview.setAttribute('aria-live','polite');
+      const preview = document.createElement('pre'); preview.className = 'field-hint recipient-code'; preview.setAttribute('aria-live','polite');
+      const preset = document.createElement('button'); preset.type = 'button'; preset.className = 'quiet';
+      preset.textContent = '使用每日一言排版';
+      const dailyTemplate = '🤩今日火花 +1\n—— 👉 每日一言 👈 ——\n{一言}';
       message.value = spec.text || '';
       const contentSync = () => {
         typesLabel.hidden = fallbackLabel.hidden = mode.value !== 'hitokoto';
+        preset.hidden = mode.value !== 'hitokoto';
         hint.textContent = mode.value === 'hitokoto' ? '模板须含一个 {一言}。第三方随机内容不保证适合所有好友；接口失败用备用文案。' :
           mode.value === 'fixed' ? '保持原有固定文案，不请求外部接口。' : '每行一句，填写 2–20 句。按天轮换以北京时间计算；本次重试沿用已生成文案。';
         message.maxLength = mode.value === 'fixed' ? 500 : 400;
         item.message_template = mode.value === 'fixed' ? message.value : prefix + JSON.stringify({mode:mode.value, text:message.value,
           ...(mode.value === 'hitokoto' ? {types:[types.value], fallback:fallbackInput.value} : {})});
-        preview.textContent = '示例预览（非实际抽取）：' + (mode.value === 'hitokoto' ? message.value.replace('{一言}','愿你今日有好心情。') :
+        preview.textContent = '示例预览（非实际抽取）：\n' + (mode.value === 'hitokoto' ? message.value.replace('{一言}','行到水穷处，坐看云起时。\n—— 终南别业（王维）') :
           mode.value === 'fixed' ? message.value : message.value.split('\n').find(line=>line.trim()) || '请填写文案');
         if (item.message_template.length > 500) hint.textContent += ' 当前配置超过 500 字，请缩短文案。';
         sync();
       };
       mode.addEventListener('change', () => {
-        if (mode.value === 'hitokoto' && !message.value.includes('{一言}')) message.value = (message.value || '今日火花 🔥') + '\n{一言}';
+        if (mode.value === 'hitokoto' && !message.value.includes('{一言}')) message.value = message.value ? message.value + '\n{一言}' : dailyTemplate;
         contentSync();
       });
+      preset.addEventListener('click', () => { message.value = dailyTemplate; contentSync(); });
       for (const element of [message,types,fallbackInput]) element.addEventListener('input',contentSync);
       contentSync();
-      label.append(message); card.append(header, nameLabel, modeLabel, typesLabel, fallbackLabel, label, hint, preview); cards.append(card);
+      label.append(message); card.append(header, nameLabel, modeLabel, typesLabel, fallbackLabel, preset, label, hint, preview); cards.append(card);
     });
     sync();
   }

@@ -260,15 +260,12 @@ class DouyinQrScanner:
                 cancelled,
                 deadline,
             )
-            profile_name, profile_id = await self._await_stage(
-                self._optional_account_profile(prepared.context, deadline), cancelled, deadline
-            )
-            display_name = profile_name or await self._await_stage(
+            display_name = await self._await_stage(
                 self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
                 cancelled,
                 deadline,
             ) or "抖音账号"
-            unique_id = profile_id or await self._await_stage(
+            unique_id = await self._await_stage(
                 self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
                 cancelled,
                 deadline,
@@ -626,41 +623,6 @@ class DouyinQrScanner:
         except Exception:
             return False
         return False
-
-    @staticmethod
-    async def _optional_account_profile(context, deadline):
-        # Profile enrichment must leave time to persist a successful login.
-        remaining = deadline - asyncio.get_running_loop().time() - 1
-        if remaining <= 0:
-            return None, None
-        try:
-            return await asyncio.wait_for(DouyinQrScanner._account_profile(context), min(5, remaining))
-        except TimeoutError:
-            return None, None
-
-    @staticmethod
-    async def _account_profile(context) -> tuple[str | None, str | None]:
-        """Read only the authenticated account, never a chat peer's profile."""
-        try:
-            response = await context.request.get(
-                ACCOUNT_INFO_URL, timeout=5_000, max_redirects=0
-            )
-            if response.status != 200:
-                return None, None
-            body = await response.json()
-            data = body.get("data") if isinstance(body, dict) else None
-            if not (isinstance(data, dict) and body.get("message") == "success"
-                    and data.get("error_code") == 0 and data.get("user_id")):
-                return None, None
-            def clean(value):
-                if not isinstance(value, str):
-                    return None
-                value = value.strip()
-                return value if 1 <= len(value) <= 64 and all(ord(c) >= 32 for c in value) else None
-            return clean(data.get("nickname")) or clean(data.get("name")), clean(data.get("unique_id"))
-        except Exception:
-            # Login remains usable when profile lookup is unavailable. No raw response logs.
-            return None, None
 
     @staticmethod
     async def _account_session_is_authenticated(context) -> bool:
