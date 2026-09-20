@@ -33,8 +33,6 @@ from spark_console.models import (
     User,
     WorkerLock,
     TaskRunRecipient,
-    RunMessageContent,
-    TaskBatchRetry,
     TaskRunDiagnostic,
     TaskQuotaBinding,
     WebSession,
@@ -69,8 +67,6 @@ from spark_console.web.contact_routes import build_contact_router
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
 templates = Jinja2Templates(directory=str(PACKAGE_ROOT / "templates"))
-from spark_console.message_content import describe_content
-templates.env.filters['message_content'] = describe_content
 
 RUN_STATUS_LABELS = {
     "partial": "部分成功",
@@ -926,10 +922,6 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "runs.html",
                 title="执行记录",
                 runs=runs,
-                pending_retry_runs=set(db.scalars(select(TaskBatchRetry.source_run_id).where(
-                    TaskBatchRetry.source_run_id.in_([run.id for run, _task, _owner, _account in runs]))).all()),
-                message_contents={run.id: {row.position: row for row in db.scalars(select(RunMessageContent).where(
-                    RunMessageContent.run_id == run.id)).all()} for run, _task, _owner, _account in runs},
                 recipient_results={run.id: list(db.scalars(select(TaskRunRecipient).where(
                     TaskRunRecipient.run_id == run.id).order_by(TaskRunRecipient.position)).all())
                     for run, _task, _owner, _account in runs},

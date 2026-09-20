@@ -15,7 +15,7 @@
           <div><time>{{ run.scheduled_for|shanghai_time }}</time><h2>{{ task.target_name }}</h2>{% if show_run_owner %}<p class="run-owner">{{ owner.username }} · {{ account.display_name if account else '未绑定抖音账号' }}</p>{% endif %}</div>
           {% set results = recipient_results.get(run.id, []) if recipient_results else [] %}
           {% set delivered = (results|selectattr('status','equalto','submitted')|list|length) + (results|selectattr('status','equalto','success')|list|length) %}
-          <span class="pill {{ 'good' if run.status == 'success' else 'warn' }}">{% if run.status == 'success' and (run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or results|selectattr('status','in',['submitted','uncertain'])|list|length) %}已提交{% elif run.status in ('failed','partial') and delivered %}部分完成{{ ' · 等待重试' if pending_retry_runs and run.id in pending_retry_runs else '' }}{% else %}{{ run.status|run_status }}{% endif %}</span>
+          <span class="pill {{ 'good' if run.status == 'success' else 'warn' }}">{% if run.status == 'success' and (run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or results|selectattr('status','in',['submitted','uncertain'])|list|length) %}已提交{% elif run.status in ('failed','partial') and delivered %}部分完成{{ ' · 重试中' if run.stage == 'batch_retry' else '' }}{% else %}{{ run.status|run_status }}{% endif %}</span>
         </div>
         <dl class="run-meta">
           <div><dt>执行阶段</dt><dd>{{ run.stage|run_stage }}</dd></div>
@@ -32,17 +32,7 @@
         {% elif run.stage == 'selecting_target' or run.error_code in ('recipient_name_unverified','recipient_identity_unverified','target_name_ambiguous','target_not_found') %}
         <p class="notice">检查好友是否改名或同名，设置不同备注后重新同步、选择好友。<a href="{{ '/admin/tasks/' ~ task.id ~ '/edit' if show_run_owner else '/tasks/' ~ task.id ~ '/edit' }}">检查任务好友</a></p>
         {% endif %}
-        {% if recipient_results and recipient_results.get(run.id) %}
-        <details class="batch-run-details"><summary>查看每位好友的结果（{{ recipient_results[run.id]|length }} 人）</summary>
-          <ul class="batch-task-summary">{% for item in recipient_results[run.id] %}
-            {% set content = message_contents.get(run.id, {}).get(item.position) if message_contents else none %}
-            <li><strong>{{ item.target_name }}</strong> <span class="pill">{{ {'pending':'待执行','sending':'发送中','success':'服务端已接受','submitted':'已提交，回执未知','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span>
-              <p>{{ content.text if content else item.message_template }}</p>
-              {% if content %}<small>内容来源：{{ content.source }} · 重试沿用本条内容</small>{% if content.receipt_json %}<details><summary>发送回执诊断</summary><pre>{{ content.receipt_json }}</pre><small>服务端接受不代表对方已读；未知结果不自动重发。</small></details>{% endif %}{% endif %}
-              {% if item.error_summary %}<p><small>{{ item.error_summary }}</small></p>{% endif %}
-              <p><a href="/runs/{{ run.id }}/recipients/{{ item.position }}/review">查看名称诊断{% if item.status == 'failed' %} / 补跑{% endif %}</a></p>
-            </li>{% endfor %}</ul>
-        </details>{% endif %}
+        {% if recipient_results and recipient_results.get(run.id) %}<details class="batch-run-details"><summary>查看每位好友的结果（{{ recipient_results[run.id]|length }} 人）</summary><ul class="batch-task-summary">{% for item in recipient_results[run.id] %}<li><strong>{{ item.target_name }}</strong> <span class="pill">{{ {'pending':'待执行','sending':'发送中','success':'成功','submitted':'已提交','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span><p>{{ item.message_template }}</p>{% if item.error_summary and item.error_code != 'delivery_confirmation_unavailable' %}<small>{{ item.error_summary }}</small>{% endif %}<p><a href="/runs/{{ run.id }}/recipients/{{ item.position }}/review">查看名称诊断{% if item.status == 'failed' %} / 补跑{% endif %}</a></p></li>{% endfor %}</ul></details>{% endif %}
       </div>
     </article>
     {% endfor %}

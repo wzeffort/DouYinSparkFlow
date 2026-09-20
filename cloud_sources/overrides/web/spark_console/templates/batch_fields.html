@@ -1,6 +1,6 @@
 <section class="batch-composer" data-batch-composer data-viewer-id="{{ user.id }}">
   <input type="hidden" name="recipients_json" value="{{ form.recipients_json|default('') }}">
-  <p class="field-hint">可选择已保存联系人，或输入准确昵称/备注。优先核对会话身份，标题名称差异只记录；无法识别身份的同名对象请先设置不同备注。支持固定文案、一言和自定义文案库。</p>
+  <p class="field-hint">可选择已保存联系人，或像以前一样输入准确昵称/备注。发送前仍会核对聊天窗口名称；同名对象请先设置不同备注。</p>
   <div class="section-head"><div><h2>好友与专属消息</h2><p>同一批最多 5 位好友，每人可以发送不同内容。</p></div><strong data-batch-count aria-live="polite">最多 5 位</strong></div>
   <div data-batch-fallback>
     <input id="task-target-sec-uid" type="hidden" name="target_sec_uid" value="{{ form.target_sec_uid|default('') }}">

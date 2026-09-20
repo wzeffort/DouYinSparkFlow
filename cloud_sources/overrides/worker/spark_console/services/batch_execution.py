@@ -7,7 +7,6 @@ from sqlalchemy import select
 from spark_console.models import (
     DouyinAccount, SparkTask, SparkTaskRecipient, TaskRun, TaskRunRecipient, TaskBatchRetry, ManualRunRetry,
     RecipientCheckEvidence,
-    RunMessageContent,
 )
 from spark_console.services.audits import AuditService
 from spark_console.services.task_capacity import TaskCapacityService
@@ -54,15 +53,6 @@ class BatchRunService:
                 finished_at=None if pending else item.finished_at,
             )
             self.session.add(row)
-            from spark_console.message_content import render_content, parse_content
-            old_content = self.session.get(RunMessageContent, (item.run_id, item.position)) if isinstance(item, TaskRunRecipient) else None
-            # HTTP generation runs outside this SQLite transaction in Worker.
-            text, source_label = (old_content.text, old_content.source) if old_content else (
-                ('', '待生成一言') if parse_content(item.message_template)['mode'] == 'hitokoto'
-                else render_content(item.message_template, run.scheduled_for))
-            self.session.add(RunMessageContent(run_id=run.id, position=item.position, text=text, source=source_label,
-                attempt_number=(old_content.attempt_number + 1) if old_content and pending and not manual else 1,
-                receipt_json=old_content.receipt_json if old_content and not pending else None))
             if pending and isinstance(item, TaskRunRecipient) and not manual:
                 prior = self.session.get(RecipientCheckEvidence, (item.run_id, item.position))
                 if prior:
@@ -72,7 +62,7 @@ class BatchRunService:
             self.session.delete(retry)
         self.session.flush()
         return [dict(position=r.position, target_name=r.target_name, target_sec_uid=r.target_sec_uid,
-                     message_template=self.session.get(RunMessageContent, (run.id, r.position)).text,
+                     message_template=r.message_template,
                      name_approvals=name_approvals(self.session, r.account_id, r.target_sec_uid, r.target_name))
                 for r in self.rows(run.id) if r.status == "pending"]
 
@@ -101,13 +91,6 @@ class BatchRunService:
         row.retryable = result.retryable and row.status == "failed"
         row.finished_at = at or datetime.now(timezone.utc)
         save_evidence(self.session, row, getattr(result, 'recipient_diagnostic', None))
-        content = self.session.get(RunMessageContent, (run_id, position))
-        if content and content.attempt_number >= 3:
-            row.retryable = False
-        receipt = getattr(result, 'send_receipt', None)
-        if content and isinstance(receipt, dict):
-            content.receipt_json = json.dumps({key: str(receipt[key])[:128] for key in
-                ('status', 'message_id', 'code', 'identity') if key in receipt}, ensure_ascii=False)
         self.session.flush()
         evidence = self.session.get(RecipientCheckEvidence, (run_id, position))
         if result.error_code == 'recipient_name_unverified' and evidence and evidence.attempt_number >= 3:
@@ -126,10 +109,7 @@ class BatchRunService:
                 row.status, row.stage = "failed", "not_started"
                 row.error_code = "batch_not_started"
                 row.error_summary = "本批中断，此好友尚未发送"
-                content = self.session.get(RunMessageContent, (run_id, row.position))
-                row.retryable = retry_pending and (not content or content.attempt_number < 3)
-                if retry_pending and not row.retryable:
-                    row.error_summary = '本轮已达到三次尝试上限；未发送，可人工检查后补跑'
+                row.retryable = retry_pending
             else:
                 continue
             row.finished_at = at or datetime.now(timezone.utc)

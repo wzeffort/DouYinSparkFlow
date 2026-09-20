@@ -243,26 +243,6 @@ class Worker:
             return finished
 
     async def _run_batch(self, run_id, task_id, account_id, cookies, credential_version, recipients, now):
-        from spark_console.message_content import render_content, parse_content
-        from spark_console.models import RunMessageContent, TaskRunRecipient
-        # Resolve external content once, outside a DB write transaction and before
-        # opening the browser. The committed text is reused by all retry paths.
-        for recipient in recipients:
-            if recipient['message_template']:
-                continue
-            with session_scope(self.engine) as db:
-                row = db.get(TaskRunRecipient, (run_id, recipient['position']))
-                template = row.message_template
-                scheduled = db.get(TaskRun, run_id).scheduled_for
-            try:
-                text, source = await asyncio.wait_for(asyncio.to_thread(render_content, template, scheduled), 6)
-            except Exception:
-                text, source = parse_content(template).get('fallback', '今日火花，祝你今天开心！'), '一言不可用，已使用备用文案'
-            with session_scope(self.engine) as db:
-                content = db.get(RunMessageContent, (run_id, recipient['position']))
-                if not content.text:
-                    content.text, content.source = text, source
-                recipient['message_template'] = content.text
         stopped_for_auth = False
         denied = False
 
