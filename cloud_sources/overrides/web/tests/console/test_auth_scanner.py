@@ -509,9 +509,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_loaded_chat_conversation_list_completes_without_account_api(self):
         scanner, browser, context = self._scanner(
-            # This tests DOM login fallback, not the timeout deadline. The chat
-            # readiness path includes a fixed 100 ms wait and Windows scheduling.
-            mode="chat_dom_success", profile_visible=False, login_timeout_seconds=2
+            mode="chat_dom_success", profile_visible=False
         )
 
         result = await scanner.run(

@@ -1,0 +1,3 @@
+services:
+  spark-web:
+    image: spark-console-web:hide-account-id-${HIDE_ID_REVISION:?required}

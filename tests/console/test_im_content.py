@@ -182,6 +182,14 @@ def test_content_picker_offline_browser(client,setup):
         assert card.get_by_text('接口失败时发送的备用文案').is_visible()
         value=json.loads(page.locator('[name=recipients_json]').input_value())[0]['message_template']
         assert parse_content(value)['mode']=='hitokoto'
+        card.get_by_role('button', name='使用每日一言排版').click()
+        assert '每日一言' in card.locator('textarea').input_value()
+        assert '终南别业（王维）' in card.locator('pre').inner_text()
+        assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
+        Path('artifacts').mkdir(exist_ok=True)
+        page.screenshot(path='artifacts/profile-quote-mobile.png', full_page=True)
+        card.locator('textarea').fill('我的自定义开头\n{一言}')
+        assert '我的自定义开头' in card.locator('pre').inner_text()
         picker.select_option('daily')
         card.locator('textarea').fill('早安\n今日开心')
         value=json.loads(page.locator('[name=recipients_json]').input_value())[0]['message_template']

@@ -1,0 +1,7 @@
+services:
+  spark-web:
+    image: spark-console-web:im-content-8bde0e97ce7a1b0182ce56af31e7cbbd6b8534a3
+  spark-worker:
+    image: spark-console-worker:im-content-8bde0e97ce7a1b0182ce56af31e7cbbd6b8534a3
+  spark-auth:
+    image: douyin-spark-console-spark-auth

@@ -59,13 +59,24 @@ def fetch_quote(types):
             body += block
             if len(body) > 8192 or time.monotonic() > deadline:
                 raise ValueError('quote too large')
-        value = json.loads(body).get('hitokoto')
+        data = json.loads(body)
+        value = data.get('hitokoto')
         if not isinstance(value, str):
             raise ValueError('invalid quote')
         value = ' '.join(value.split())
         if not 1 <= len(value) <= 200 or any(ord(c) < 32 for c in value):
             raise ValueError('invalid quote')
-        return value
+        def metadata(key, unknown):
+            part = data.get(key)
+            if not isinstance(part, str) or not part.strip():
+                return unknown
+            part = ' '.join(part.split())
+            if len(part) > 80 or any(ord(c) < 32 for c in part):
+                return unknown
+            return part
+        source = metadata('from', '未知来源')
+        author = metadata('from_who', '未知作者')
+        return f'{value}\n—— {source}（{author}）'
 
 
 def render_content(template, scheduled_for, *, quote=fetch_quote):

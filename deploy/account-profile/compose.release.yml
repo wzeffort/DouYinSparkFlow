@@ -1,0 +1,7 @@
+services:
+  spark-web:
+    image: spark-console-web:account-profile-${SPARK_REVISION:?required}
+  spark-worker:
+    image: spark-console-worker:account-profile-${SPARK_REVISION:?required}
+  spark-auth:
+    image: spark-console-auth:account-profile-${SPARK_REVISION:?required}

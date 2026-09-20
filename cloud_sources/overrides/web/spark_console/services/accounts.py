@@ -94,9 +94,7 @@ class AccountService:
         reused = account is not None
         if reused:
             previous_incident_id = account.auth_incident_id
-            # A temporary lookup failure must not erase an existing nickname/remark.
-            if name != "抖音账号" or account.display_name == "抖音账号":
-                account.display_name = name
+            account.display_name = name
             account.encrypted_cookies = sealed.ciphertext
             account.cookie_nonce = sealed.nonce
             account.cookie_version = 2
@@ -168,15 +166,8 @@ class AccountService:
             .where(DouyinAccount.owner_user_id == owner_id)
             .order_by(DouyinAccount.created_at)
         ).all()
-        identities = dict(self.session.execute(
-            select(DouyinAccountIdentity.account_id, DouyinAccountIdentity.douyin_unique_id)
-            .join(DouyinAccount, DouyinAccount.id == DouyinAccountIdentity.account_id)
-            .where(DouyinAccount.owner_user_id == owner_id)
-        ).all())
         return [
             {"id": item.id, "display_name": item.display_name,
-             "account_label": (f"{item.display_name} · {identities[item.id]}"
-                               if identities.get(item.id) else item.display_name),
              "validation_state": item.validation_state,
              "invalid_reason_code": item.invalid_reason_code}
             for item in accounts
