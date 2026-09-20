@@ -366,15 +366,11 @@ async def _wait_for_visible_search_results(page, candidate, timeout_ms):
         await asyncio.sleep(min(0.2, remaining))
 
 
-def _display_name(value):
-    return unicodedata.normalize('NFC', value).replace('\xa0', ' ').strip()
-
-
 def _preferred_conversation(matches, candidates):
     # API aliases put the current remark first. A uniquely matching remark
     # must not be made ambiguous by another contact's shared nickname.
     for name in candidates:
-        exact = [pair for pair in matches if _display_name(pair[1]) == _display_name(name)]
+        exact = [pair for pair in matches if pair[1] == name]
         if len(exact) > 1:
             raise AmbiguousTargetError('存在多个同名好友，请设置不同的备注后重新选择')
         if exact:
@@ -398,7 +394,7 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
         title = (
             await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
         ).strip()
-        if _display_name(title) in {_display_name(name) for name in candidates}:
+        if title in candidates:
             matches.append((item, title))
     preferred = _preferred_conversation(matches, candidates)
     if preferred:
@@ -434,7 +430,7 @@ async def select_web_chat_target(page, target, timeout=30000, aliases=()):
         title = (
             await item.locator(CONVERSATION_TITLE_SELECTOR).inner_text()
         ).strip()
-        if _display_name(title) in {_display_name(name) for name in candidates}:
+        if title in candidates:
             matches.append((item, title))
     preferred = _preferred_conversation(matches, candidates)
     if preferred:

@@ -593,13 +593,3 @@ class AppSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=utc_now, onupdate=utc_now
     )
-
-
-class RunMessageContent(Base):
-    __tablename__ = 'run_message_content'
-    run_id: Mapped[str] = mapped_column(ForeignKey('task_runs.id', ondelete='CASCADE'), primary_key=True)
-    position: Mapped[int] = mapped_column(Integer, primary_key=True)
-    text: Mapped[str] = mapped_column(String(500), nullable=False)
-    source: Mapped[str] = mapped_column(String(80), nullable=False)
-    attempt_number: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
-    receipt_json: Mapped[str | None] = mapped_column(Text)

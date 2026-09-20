@@ -22,8 +22,6 @@ from core.web_chat import (
 )
 from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.execution_diagnostics import trace_phase
-from core.im_evidence import (ConversationChanged, select_identity, current_identity,
-                              verify_conversation, SendMonitor)
 
 
 logger = logging.getLogger(__name__)
@@ -47,7 +45,6 @@ class ExecutionResult:
     error_summary: str | None = None
     retryable: bool = False
     recipient_diagnostic: dict | None = None
-    send_receipt: dict | None = None
 
 
 class DouyinExecutor:
@@ -111,17 +108,16 @@ class DouyinExecutor:
                     await browser.close()
 
     async def _batch_recipient(self, page, identities, recipient, position, before_send):
+        from core.tasks import confirm_message_sent
+
         phase = "检查登录"
         diagnostic = None
-        conversation = None
 
         async def verify(selected_name):
             nonlocal diagnostic
             approved = tuple(pair['observed_name'] for pair in recipient.get('name_approvals', ())
                              if pair['selected_name'] == selected_name)
             diagnostic = await verify_chat_recipient_name(page, selected_name, approved_names=approved)
-            if conversation:
-                await verify_conversation(page, conversation['conv_id'], recipient.get('target_sec_uid'))
 
         trace_phase('authenticating', position)
         try:
@@ -132,10 +128,8 @@ class DouyinExecutor:
                 identity = identities.get(uid) if uid and identities is not None else None
                 phase = "选择好友"
                 trace_phase('selecting_target', position)
-                chosen = await select_identity(page, uid)
-                selected_name = chosen['title'] if chosen else await select_web_chat_target(page, recipient["target_name"], timeout=20000,
+                selected_name = await select_web_chat_target(page, recipient["target_name"], timeout=20000,
                                              aliases=identity.aliases if identity else ())
-                conversation = chosen or await current_identity(page, uid)
                 phase = "等待聊天输入框"
                 trace_phase('editor_ready', position)
                 await page.wait_for_selector(CHAT_INPUT_SELECTOR, timeout=10000)
@@ -157,9 +151,6 @@ class DouyinExecutor:
                 phase = "发送前复核名称"
                 trace_phase('recipient_check', position)
                 await verify(selected_name)
-        except ConversationChanged:
-            return ExecutionResult(False, "selecting_target", "recipient_identity_unverified",
-                                   "会话身份不一致或发生变化，本次未发送", True)
         except RecipientNameError as error:
             return ExecutionResult(False, "selecting_target", "recipient_name_unverified",
                                    str(error), True, error.diagnostic)
@@ -178,39 +169,23 @@ class DouyinExecutor:
             return ExecutionResult(False, "authorization", "authorization_ended", "任务已暂停、账号失效或名额到期，本批次已停止")
         try:
             await verify(selected_name)
-        except ConversationChanged:
-            return ExecutionResult(False, "selecting_target", "recipient_identity_unverified",
-                                   "发送前会话身份发生变化，本次未发送", True)
         except RecipientNameError as error:
             return ExecutionResult(False, "selecting_target", "recipient_name_unverified",
                                    "发送检查点后聊天对象尚未确认，本次未发送；请查看诊断", True, error.diagnostic)
-        monitor = SendMonitor(page, conversation['conv_id'], recipient['message_template']) if conversation else None
         try:
-            if monitor:
-                monitor.start()
             async with asyncio.timeout(20):
                 trace_phase("sending", position)
                 await editor.press("Enter")
         except Exception:
-            if monitor:
-                await monitor.close()
             return ExecutionResult(False, "sending", "delivery_uncertain", "发送结果不明，请核实；不会自动重发", recipient_diagnostic=diagnostic)
         try:
-            trace_phase("confirming", position)
-            evidence = await monitor.wait() if monitor else None
+            async with asyncio.timeout(20):
+                trace_phase("confirming", position)
+                await confirm_message_sent(page, page.locator(CHAT_INPUT_SELECTOR).first,
+                                           recipient["message_template"], timeout=15000)
         except Exception:
-            evidence = None
-        finally:
-            if monitor:
-                await monitor.close()
-        if evidence and evidence['status'] == 'accepted':
-            return ExecutionResult(True, "complete", error_summary="服务端已接受（不代表对方已读）",
-                                   recipient_diagnostic=diagnostic, send_receipt=evidence)
-        if evidence and evidence['status'] == 'rejected':
-            return ExecutionResult(False, "rejected", "delivery_rejected", "服务端拒绝本次发送，请检查诊断；不会自动重发",
-                                   recipient_diagnostic=diagnostic, send_receipt=evidence)
-        return ExecutionResult(True, "submitted", "delivery_confirmation_unavailable", "消息已提交，未取得与本次消息对应的回执；不会自动重发",
-                               recipient_diagnostic=diagnostic, send_receipt={'status':'unknown', 'identity':'会话标识可读' if conversation else '会话标识不可读'})
+            return ExecutionResult(True, "submitted", "delivery_confirmation_unavailable", "消息已提交，页面未能二次确认", recipient_diagnostic=diagnostic)
+        return ExecutionResult(True, "complete", recipient_diagnostic=diagnostic)
 
     async def execute(
         self,

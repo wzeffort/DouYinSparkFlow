@@ -83,48 +83,7 @@
       const message = document.createElement('textarea'); message.value = item.message_template; message.maxLength = 500; message.rows = 3; message.required = true;
       message.placeholder = '例如：今天也记得开心呀';
       message.addEventListener('input', () => { item.message_template = message.value; sync(); });
-      const prefix = '@spark-content:';
-      let spec = {mode:'fixed', text:item.message_template};
-      if (item.message_template.startsWith(prefix)) {
-        try { spec = JSON.parse(item.message_template.slice(prefix.length)); } catch { /* Server validates on save. */ }
-      }
-      const modeLabel = document.createElement('label'); modeLabel.textContent = '内容方式';
-      const mode = document.createElement('select');
-      for (const [value, text] of [['fixed','固定文案'], ['hitokoto','随机一言'], ['random','自定义文案库 · 随机'], ['daily','自定义文案库 · 按天轮换']]) {
-        const option = document.createElement('option'); option.value = value; option.textContent = text; mode.append(option);
-      }
-      mode.value = spec.mode; modeLabel.append(mode);
-      const typesLabel = document.createElement('label'); typesLabel.textContent = '一言分类';
-      const types = document.createElement('select');
-      for (const [value,text] of [['i','诗词'],['d','文学'],['a','动画'],['b','漫画'],['c','游戏'],['e','原创'],['f','网络'],['h','影视'],['k','哲学'],['l','抖机灵']]) {
-        const option = document.createElement('option'); option.value = value; option.textContent = text; types.append(option);
-      }
-      types.value = spec.types?.[0] || 'i'; typesLabel.append(types);
-      const fallbackLabel = document.createElement('label'); fallbackLabel.textContent = '接口失败时发送的备用文案';
-      const fallbackInput = document.createElement('input'); fallbackInput.maxLength = 200;
-      fallbackInput.value = spec.fallback || '今日火花，祝你今天开心！'; fallbackLabel.append(fallbackInput);
-      const hint = document.createElement('p'); hint.className = 'field-hint';
-      const preview = document.createElement('p'); preview.className = 'field-hint'; preview.setAttribute('aria-live','polite');
-      message.value = spec.text || '';
-      const contentSync = () => {
-        typesLabel.hidden = fallbackLabel.hidden = mode.value !== 'hitokoto';
-        hint.textContent = mode.value === 'hitokoto' ? '模板须含一个 {一言}。第三方随机内容不保证适合所有好友；接口失败用备用文案。' :
-          mode.value === 'fixed' ? '保持原有固定文案，不请求外部接口。' : '每行一句，填写 2–20 句。按天轮换以北京时间计算；本次重试沿用已生成文案。';
-        message.maxLength = mode.value === 'fixed' ? 500 : 400;
-        item.message_template = mode.value === 'fixed' ? message.value : prefix + JSON.stringify({mode:mode.value, text:message.value,
-          ...(mode.value === 'hitokoto' ? {types:[types.value], fallback:fallbackInput.value} : {})});
-        preview.textContent = '示例预览（非实际抽取）：' + (mode.value === 'hitokoto' ? message.value.replace('{一言}','愿你今日有好心情。') :
-          mode.value === 'fixed' ? message.value : message.value.split('\n').find(line=>line.trim()) || '请填写文案');
-        if (item.message_template.length > 500) hint.textContent += ' 当前配置超过 500 字，请缩短文案。';
-        sync();
-      };
-      mode.addEventListener('change', () => {
-        if (mode.value === 'hitokoto' && !message.value.includes('{一言}')) message.value = (message.value || '今日火花 🔥') + '\n{一言}';
-        contentSync();
-      });
-      for (const element of [message,types,fallbackInput]) element.addEventListener('input',contentSync);
-      contentSync();
-      label.append(message); card.append(header, nameLabel, modeLabel, typesLabel, fallbackLabel, label, hint, preview); cards.append(card);
+      label.append(message); card.append(header, nameLabel, label); cards.append(card);
     });
     sync();
   }

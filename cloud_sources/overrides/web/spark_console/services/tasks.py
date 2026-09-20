@@ -134,11 +134,6 @@ class TaskService:
             seen_names.add(name)
             if uid:
                 seen_ids.add(uid)
-            from spark_console.message_content import parse_content
-            try:
-                parse_content(message)
-            except ValueError as error:
-                raise ValidationError(str(error)) from None
             clean.append(dict(target_name=name, target_sec_uid=uid, message_template=message))
         return clean
 
@@ -202,9 +197,6 @@ class TaskService:
         target_sec_uid: str | None = None,
         recipients: list[dict] | None = None,
     ) -> SparkTask:
-        from spark_console.message_content import PREFIX
-        if recipients is None and message_template.startswith(PREFIX):
-            recipients = [dict(target_name=target_name, target_sec_uid=target_sec_uid or '', message_template=message_template)]
         if recipients is not None:
             recipients = self.validate_recipients(owner_id, account_id, recipients)
             self.assert_no_overlap(account_id, recipients)

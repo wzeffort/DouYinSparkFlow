@@ -1,0 +1,18 @@
+# Layer on the existing production compose; do not replace its configuration.
+services:
+  spark-web:
+    image: spark-console-web:im-content-${SPARK_REVISION:?required}
+    build:
+      context: ${SPARK_RELEASE_ROOT:?required}
+      dockerfile: deploy/im-content/web.Dockerfile
+      network: none
+      args:
+        REVISION: ${SPARK_REVISION:?required}
+  spark-worker:
+    image: spark-console-worker:im-content-${SPARK_REVISION:?required}
+    build:
+      context: ${SPARK_RELEASE_ROOT:?required}
+      dockerfile: deploy/im-content/worker.Dockerfile
+      network: none
+      args:
+        REVISION: ${SPARK_REVISION:?required}
