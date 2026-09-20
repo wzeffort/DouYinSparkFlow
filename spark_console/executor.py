@@ -24,6 +24,7 @@ from spark_console.credentials import CredentialError, CredentialPayload
 from spark_console.execution_diagnostics import trace_phase
 from core.im_evidence import (ConversationChanged, select_identity, current_identity,
                               verify_conversation, SendMonitor)
+from core.page_send_evidence import PageSendEvidence
 
 
 logger = logging.getLogger(__name__)
@@ -184,33 +185,79 @@ class DouyinExecutor:
         except RecipientNameError as error:
             return ExecutionResult(False, "selecting_target", "recipient_name_unverified",
                                    "发送检查点后聊天对象尚未确认，本次未发送；请查看诊断", True, error.diagnostic)
-        monitor = SendMonitor(page, conversation['conv_id'], recipient['message_template']) if conversation else None
+        return await self._send_and_confirm(page, editor, recipient['message_template'], conversation, diagnostic)
+
+    async def _send_and_confirm(self, page, editor, message, conversation=None, diagnostic=None):
+        """Both task formats use the same one-Enter confirmation boundary."""
+        monitor = SendMonitor(page, conversation['conv_id'], message) if conversation else None
+        screen = PageSendEvidence(page)
+        await screen.start(message)
         try:
             if monitor:
-                monitor.start()
-            async with asyncio.timeout(20):
-                trace_phase("sending", position)
-                await editor.press("Enter")
-        except Exception:
+                try:
+                    monitor.start()
+                except Exception:
+                    try:
+                        await monitor.close()
+                    except Exception:
+                        pass
+                    monitor = None
+            try:
+                async with asyncio.timeout(20):
+                    trace_phase("sending")
+                    await editor.press("Enter")
+            except Exception:
+                return ExecutionResult(False, "sending", "delivery_uncertain", "发送结果不明，请核实；不会自动重发", recipient_diagnostic=diagnostic)
+            trace_phase("confirming")
+            try:
+                evidence = await monitor.wait() if monitor else None
+            except Exception:
+                evidence = None
+            page_confirmed = False
+            if not evidence and screen.armed:
+                deadline = asyncio.get_running_loop().time() + 6
+                while asyncio.get_running_loop().time() < deadline:
+                    if monitor and monitor.result:
+                        evidence = monitor.result
+                        break
+                    if await screen.confirmed():
+                        page_confirmed = True
+                        break
+                    await asyncio.sleep(.25)
+            # A late explicit rejection takes precedence over page-only evidence.
             if monitor:
-                await monitor.close()
-            return ExecutionResult(False, "sending", "delivery_uncertain", "发送结果不明，请核实；不会自动重发", recipient_diagnostic=diagnostic)
-        try:
-            trace_phase("confirming", position)
-            evidence = await monitor.wait() if monitor else None
+                if monitor.pending:
+                    await asyncio.gather(*list(monitor.pending), return_exceptions=True)
+                evidence = monitor.result or evidence
+                if len(monitor.requests) > 1:
+                    evidence, page_confirmed = None, False
+            if evidence and evidence['status'] == 'rejected':
+                return ExecutionResult(False, "rejected", "delivery_rejected", "服务端拒绝本次发送；不会自动重发", recipient_diagnostic=diagnostic, send_receipt=evidence)
+            if evidence and evidence['status'] == 'accepted':
+                return ExecutionResult(True, "complete", error_summary="服务端已接受（不代表对方已读）", recipient_diagnostic=diagnostic, send_receipt=evidence)
+            if page_confirmed:
+                if conversation:
+                    try:
+                        await verify_conversation(page, conversation['conv_id'])
+                    except Exception:
+                        page_confirmed = False
+                if page_confirmed:
+                    if monitor and monitor.result:
+                        if monitor.result.get('status') == 'rejected':
+                            return ExecutionResult(False, "rejected", "delivery_rejected", "服务端拒绝本次发送；不会自动重发", recipient_diagnostic=diagnostic, send_receipt=monitor.result)
+                        if monitor.result.get('status') == 'accepted':
+                            return ExecutionResult(True, "complete", error_summary="服务端已接受（不代表对方已读）", recipient_diagnostic=diagnostic, send_receipt=monitor.result)
+                    return ExecutionResult(True, "page_confirmed", error_summary="成功（页面确认）：当前会话出现本次新增的发送气泡，未取得服务端回执", recipient_diagnostic=diagnostic, send_receipt={'status':'page_confirmed'})
+            return ExecutionResult(True, "submitted", "delivery_confirmation_unavailable", "消息已提交，未取得回执或可靠页面确认；不会自动重发", recipient_diagnostic=diagnostic, send_receipt={'status':'unknown', 'identity':'会话标识可读' if conversation else '会话标识不可读'})
         except Exception:
-            evidence = None
+            return ExecutionResult(True, "submitted", "delivery_confirmation_unavailable", "发送确认异常，结果待核实；不会自动重发", recipient_diagnostic=diagnostic)
         finally:
+            await screen.close()
             if monitor:
-                await monitor.close()
-        if evidence and evidence['status'] == 'accepted':
-            return ExecutionResult(True, "complete", error_summary="服务端已接受（不代表对方已读）",
-                                   recipient_diagnostic=diagnostic, send_receipt=evidence)
-        if evidence and evidence['status'] == 'rejected':
-            return ExecutionResult(False, "rejected", "delivery_rejected", "服务端拒绝本次发送，请检查诊断；不会自动重发",
-                                   recipient_diagnostic=diagnostic, send_receipt=evidence)
-        return ExecutionResult(True, "submitted", "delivery_confirmation_unavailable", "消息已提交，未取得与本次消息对应的回执；不会自动重发",
-                               recipient_diagnostic=diagnostic, send_receipt={'status':'unknown', 'identity':'会话标识可读' if conversation else '会话标识不可读'})
+                try:
+                    await monitor.close()
+                except Exception:
+                    pass
 
     async def execute(
         self,
@@ -221,7 +268,6 @@ class DouyinExecutor:
         target_sec_uid: str | None = None,
     ) -> ExecutionResult:
         from playwright.async_api import async_playwright
-        from core.tasks import confirm_message_sent
 
         stage = ExecutionStage.AUTHENTICATING
         message_submitted = False
@@ -279,6 +325,7 @@ class DouyinExecutor:
                     trace_phase('recipient_check')
                     await verify_chat_recipient_name(page, selected_name)
                     editor = page.locator(CHAT_INPUT_SELECTOR).first
+                    await editor.fill("")
                     trace_phase('message_input')
                     lines = message.splitlines() or [message]
                     for index, line in enumerate(lines):
@@ -287,22 +334,11 @@ class DouyinExecutor:
                             await editor.press("Shift+Enter")
                     trace_phase('recipient_check')
                     await verify_chat_recipient_name(page, selected_name)
+                    conversation = await current_identity(page, target_sec_uid)
                     stage = ExecutionStage.SENDING
                     trace_phase('sending')
                     message_submitted = True
-                    await editor.press("Enter")
-                    stage = ExecutionStage.CONFIRMING
-                    trace_phase('confirming')
-                    try:
-                        await confirm_message_sent(page, editor, message, timeout=20000)
-                    except Exception:
-                        return ExecutionResult(
-                            True,
-                            ExecutionStage.SUBMITTED,
-                            "delivery_confirmation_unavailable",
-                            "消息已提交，页面未能二次确认",
-                        )
-                    return ExecutionResult(True, ExecutionStage.COMPLETE)
+                    return await self._send_and_confirm(page, editor, message, conversation)
                 finally:
                     try:
                         if context is not None:

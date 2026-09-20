@@ -436,9 +436,6 @@ class _FakeEditor:
     async def type(self, _value):
         return None
 
-    async def fill(self, _value):
-        return None
-
     async def press(self, key):
         self.pressed.append(key)
 

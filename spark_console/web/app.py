@@ -93,6 +93,7 @@ RUN_STAGE_LABELS = {
     "submitted": "已提交发送",
     "claimed": "已领取",
     "complete": "已完成",
+    "page_confirmed": "成功（页面确认）",
     "missed_startup": "执行器离线",
     "late": "超过发送窗口",
     "clock_check": "时间校验",

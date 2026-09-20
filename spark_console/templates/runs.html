@@ -15,7 +15,7 @@
           <div><time>{{ run.scheduled_for|shanghai_time }}</time><h2>{{ task.target_name }}</h2>{% if show_run_owner %}<p class="run-owner">{{ owner.username }} · {{ account.display_name if account else '未绑定抖音账号' }}</p>{% endif %}</div>
           {% set results = recipient_results.get(run.id, []) if recipient_results else [] %}
           {% set delivered = (results|selectattr('status','equalto','submitted')|list|length) + (results|selectattr('status','equalto','success')|list|length) %}
-          <span class="pill {{ 'good' if run.status == 'success' else 'warn' }}">{% if run.status == 'success' and (run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or results|selectattr('status','in',['submitted','uncertain'])|list|length) %}已提交{% elif run.status in ('failed','partial') and delivered %}部分完成{{ ' · 等待重试' if pending_retry_runs and run.id in pending_retry_runs else '' }}{% else %}{{ run.status|run_status }}{% endif %}</span>
+          <span class="pill {{ 'good' if run.status == 'success' else 'warn' }}">{% if run.status == 'success' and (run.stage == 'submitted' or run.error_code == 'delivery_confirmation_unavailable' or results|selectattr('status','in',['submitted','uncertain'])|list|length) %}已提交{% elif run.status == 'success' and (run.stage == 'page_confirmed' or results|selectattr('stage','equalto','page_confirmed')|list|length) %}成功（页面确认）{% elif run.status in ('failed','partial') and delivered %}部分完成{{ ' · 等待重试' if pending_retry_runs and run.id in pending_retry_runs else '' }}{% else %}{{ run.status|run_status }}{% endif %}</span>
         </div>
         <dl class="run-meta">
           <div><dt>执行阶段</dt><dd>{{ run.stage|run_stage }}</dd></div>
@@ -24,7 +24,7 @@
         </dl>
         {% set diagnostic = run_diagnostics.get(run.id) if run_diagnostics else none %}
         {% if show_run_owner and diagnostic %}<details class="batch-run-details"><summary>阶段耗时 · {% if diagnostic.finished or run.finished_at or run.status in ('success','failed','partial','skipped') %}执行已结束{% else %}当前阶段：{{ diagnostic.last_phase }}{% endif %}</summary><ul class="run-diagnostic-list">{% for event in diagnostic.events %}<li>{{ event.label }}{% if event.position is not none %}（本次第 {{ event.position + 1 }} 位好友）{% endif %}<span>{{ event.seconds }} 秒</span></li>{% endfor %}</ul></details>{% endif %}
-        {% if run.error_summary and run.error_code != 'delivery_confirmation_unavailable' and run.stage != 'submitted' %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
+        {% if run.error_summary %}<p class="run-note{{ ' info' if run.status == 'success' else '' }}">{{ run.error_summary }}</p>{% endif %}
         {% if run.error_code in ('login_expired','cookie_invalid','chat_ui_unavailable') %}
         <p class="notice">需要重新扫码登录。{% if show_run_owner and owner.id != user.id %}请通知 {{ owner.username }} 在自己的抖音账号页面重新登录。{% else %}<a href="/accounts">前往抖音账号</a>{% endif %}</p>
         {% elif run.error_code in ('authorization_ended','quota_expired') %}
@@ -36,7 +36,7 @@
         <details class="batch-run-details"><summary>查看每位好友的结果（{{ recipient_results[run.id]|length }} 人）</summary>
           <ul class="batch-task-summary">{% for item in recipient_results[run.id] %}
             {% set content = message_contents.get(run.id, {}).get(item.position) if message_contents else none %}
-            <li><strong>{{ item.target_name }}</strong> <span class="pill">{{ {'pending':'待执行','sending':'发送中','success':'服务端已接受','submitted':'已提交，回执未知','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span>
+            <li><strong>{{ item.target_name }}</strong> <span class="pill">{{ '成功（页面确认）' if item.status == 'success' and item.stage == 'page_confirmed' else {'pending':'待执行','sending':'发送中','success':'服务端已接受','submitted':'已提交，回执未知','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span>
               <p>{{ content.text if content else item.message_template }}</p>
               {% if content %}<small>内容来源：{{ content.source }} · 重试沿用本条内容</small>{% if content.receipt_json %}<details><summary>发送回执诊断</summary><pre>{{ content.receipt_json }}</pre><small>服务端接受不代表对方已读；未知结果不自动重发。</small></details>{% endif %}{% endif %}
               {% if item.error_summary %}<p><small>{{ item.error_summary }}</small></p>{% endif %}

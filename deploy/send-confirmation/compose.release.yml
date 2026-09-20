@@ -1,0 +1,5 @@
+services:
+  spark-web:
+    image: spark-console-web:send-confirmation-${SEND_CONFIRM_REVISION:?required}
+  spark-worker:
+    image: spark-console-worker:send-confirmation-${SEND_CONFIRM_REVISION:?required}
