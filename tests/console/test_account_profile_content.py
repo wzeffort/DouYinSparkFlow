@@ -75,7 +75,7 @@ def test_quote_retains_attribution(extra, attribution):
         assert fetch_quote(['i']) == '行到水穷处，坐看云起时。\n—— ' + attribution
 
 
-def test_duplicate_generic_accounts_have_distinct_labels_without_renaming(setup, client):
+def test_account_labels_never_display_internal_ids(setup, client):
     db, _, _, owner, stranger, account, *_ = setup
     account.display_name = '抖音账号'
     second = DouyinAccount(owner_user_id=owner.id, display_name='抖音账号', encrypted_cookies=b'x', cookie_nonce=b'x')
@@ -90,7 +90,11 @@ def test_duplicate_generic_accounts_have_distinct_labels_without_renaming(setup,
     page = client.get('/tasks')
     assert page.status_code == 200
     assert '抖音账号 · second-id' in page.text
-    assert f'抖音账号 · 账号 {account.id[:8]}' in page.text
+    assert next(row for row in rows if row['id'] == account.id)['account_label'] == '抖音账号'
+    assert f'抖音账号 · 账号 {account.id[:8]}' not in page.text
+    accounts_page = client.get('/accounts')
+    assert accounts_page.status_code == 200
+    assert f'抖音账号 · 账号 {account.id[:8]}' not in accounts_page.text
     assert other.id not in page.text
 
 

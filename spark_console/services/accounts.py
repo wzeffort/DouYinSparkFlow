@@ -175,7 +175,8 @@ class AccountService:
         ).all())
         return [
             {"id": item.id, "display_name": item.display_name,
-             "account_label": f"{item.display_name} · {identities.get(item.id) or ('账号 ' + item.id[:8])}",
+             "account_label": (f"{item.display_name} · {identities[item.id]}"
+                               if identities.get(item.id) else item.display_name),
              "validation_state": item.validation_state,
              "invalid_reason_code": item.invalid_reason_code}
             for item in accounts
