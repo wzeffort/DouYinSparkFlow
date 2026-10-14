@@ -1,0 +1,14 @@
+[Unit]
+Description=Spark shared-database host health collector
+After=docker.service
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/python3 /opt/spark-shared-db/ops/spark_health_collector.py --output /opt/spark-shared-db/deploy/shared-db/runtime/host-health.json --state /opt/spark-shared-db/deploy/shared-db/runtime/collector-state.json --interface enp39s0 --container-map /opt/spark-shared-db/deploy/shared-db/health-new.json
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/spark-shared-db/deploy/shared-db/runtime
+RestrictAddressFamilies=AF_UNIX
+UMask=0022

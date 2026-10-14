@@ -1,0 +1,8 @@
+{
+  "spark-web": "spark-shared-apps-spark-web-1",
+  "spark-worker": "spark-shared-apps-spark-worker-1",
+  "spark-auth": "spark-shared-apps-spark-auth-1",
+  "spark-notifier": "spark-shared-apps-spark-notifier-1",
+  "bps-web": "bps-bps-web-1",
+  "bps-db": "bps-bps-db-1"
+}

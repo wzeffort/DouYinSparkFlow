@@ -1,0 +1,10 @@
+[Unit]
+Description=Independent Spark PostgreSQL backup through encrypted tunnel
+After=docker.service spark-tunnel.service
+Requires=docker.service spark-tunnel.service
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/spark-postgres-backup.env
+ExecStart=/bin/sh /opt/spark-shared-db/deploy/shared-db/backup-postgres.sh
+UMask=0077
+TimeoutStartSec=600
