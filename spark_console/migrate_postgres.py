@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 import sqlite3
 
-from sqlalchemy import Boolean, DateTime, MetaData, Table, create_engine, func, inspect, select, text
+from sqlalchemy import Boolean, DateTime, MetaData, String, Table, create_engine, func, inspect, select, text
 from spark_console.db import create_schema
 from spark_console.models import Base
 from spark_console import referral_models, push_models, profile_models
@@ -88,7 +88,8 @@ def migrate(snapshot, destination_url, *, writes_stopped=False, standby_snapshot
                 if columns - set(table.c.keys()):
                     raise ValueError('unmapped columns in ' + table.name)
                 # Bound memory use; original database is streamed in PK order.
-                order = ', '.join('"' + c.name + '"' for c in table.primary_key)
+                order = ', '.join('"' + c.name + '"' + (' COLLATE BINARY' if isinstance(c.type, String) else '')
+                                  for c in table.primary_key)
                 if not order:
                     raise ValueError('source table needs a primary key: ' + table.name)
                 cursor = source.execute('SELECT * FROM ' + quoted + ' ORDER BY ' + order)
@@ -99,7 +100,10 @@ def migrate(snapshot, destination_url, *, writes_stopped=False, standby_snapshot
                     total += len(rows)
                 # Re-read both sides for an exact, normalized content comparison.
                 original = (normalize(row, table) for row in source.execute('SELECT * FROM ' + quoted + ' ORDER BY ' + order))
-                transferred = connection.execute(select(*[table.c[n] for n in sorted(columns)]).order_by(*table.primary_key)).mappings()
+                # Database locale order can differ from SQLite's binary order,
+                # especially for mixed-case IDs. Compare in UTF-8 byte order.
+                target_order = [c.collate('C') if isinstance(c.type, String) else c for c in table.primary_key]
+                transferred = connection.execute(select(*[table.c[n] for n in sorted(columns)]).order_by(*target_order)).mappings()
                 before, after = digest(original), digest(transferred)
                 if before != after:
                     raise ValueError('content verification failed: ' + table.name)

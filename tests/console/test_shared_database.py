@@ -15,7 +15,7 @@ from spark_console.browser_runtime import BrowserSlot
 from spark_console.cluster import ClusterBrowserSlot, exclusive, NOTIFIER_LOCK
 from spark_console.db import create_schema, session_scope
 from spark_console.migrate_postgres import migrate
-from spark_console.models import DouyinAccount, SparkTask, TaskQuotaGrant, User, WebSession
+from spark_console.models import Base, DouyinAccount, DouyinContactIdentity, SparkTask, TaskQuotaGrant, User, WebSession
 from spark_console.scheduler import claim_next_due_task
 
 
@@ -195,3 +195,28 @@ def test_standby_blocks_writes_and_traffic_readiness(pg, tmp_path):
         assert client.get('/health/ready').status_code == 503
         assert client.get('/login').status_code == 200
         assert client.post('/login', data={'username':'any','password':'any'}).status_code == 503
+
+
+def test_migration_hashes_are_independent_of_database_locale(pg, tmp_path):
+    engine, url = pg
+    with engine.connect() as connection:
+        collation = connection.scalar(text("SELECT quote_ident(collname) FROM pg_collation WHERE collprovider='i' AND collname LIKE 'en-US%' LIMIT 1"))
+    if not collation:
+        pytest.skip('test requires an English ICU collation')
+    snapshot = tmp_path/'locale.db'
+    sqlite = create_engine('sqlite:///' + snapshot.as_posix())
+    create_schema(sqlite)
+    seed(sqlite)
+    with session_scope(sqlite) as db:
+        account = db.scalar(select(DouyinAccount))
+        for value in ['A', 'B', 'a', 'b']:
+            db.add(DouyinContactIdentity(account_id=account.id, sec_uid=value))
+    sqlite.dispose()
+    Base.metadata.create_all(engine)
+    with engine.begin() as connection:
+        connection.exec_driver_sql('ALTER TABLE douyin_contact_identities ALTER COLUMN sec_uid TYPE VARCHAR(256) COLLATE ' + collation)
+        localized = list(connection.scalars(text("SELECT x FROM (VALUES ('A'),('B'),('a'),('b')) AS t(x) ORDER BY x COLLATE " + collation)))
+        if localized == ['A', 'B', 'a', 'b']:
+            pytest.skip('available ICU collation uses binary order on this host')
+    report = migrate(snapshot, url, writes_stopped=True)
+    assert report['douyin_contact_identities']['rows'] == 4
