@@ -36,6 +36,18 @@ def build_announcement_router(engine,auth,page):
     combined=[('announcement',a,r,a.published_at) for a,r in received]
    combined += [('system',n,None,n.created_at) for n in db.scalars(select(UserNotification).where(UserNotification.user_id==user.id)).all()]
    combined.sort(key=lambda x:(aware_time(x[3]),x[1].id),reverse=True);pages=max(1,(len(combined)+7)//8);current=min(max(1,page_number),pages);chunk=combined[(current-1)*8:current*8]
+   # Only messages displayed on this page count as read, and only for this user.
+   now=datetime.now(timezone.utc)
+   for kind,notice,recipient,_ in chunk:
+    if kind=='announcement' and recipient.read_at is None:
+     recipient.read_at=now
+    elif kind=='system' and notice.read_at is None:
+     notice.read_at=now
+    elif kind=='sent':
+     own=next((r for a,r in received if a.id==notice.id),None)
+     if own is not None and own.read_at is None:own.read_at=now
+   db.flush()
+   base=auth._page_context(db,user,_record)
    return page(request,'notifications.html',title='消息中心',message_items=chunk,page_number=current,pages=pages,message_total=len(combined),**base)
  @router.get('/notifications')
  def legacy_notifications():return RedirectResponse('/messages',303)

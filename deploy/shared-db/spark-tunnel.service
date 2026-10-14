@@ -1,0 +1,18 @@
+[Unit]
+Description=Spark encrypted database and peer web tunnel (Aliyun to AWS)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=spark-tunnel
+ExecStart=/usr/bin/ssh -NT -i /etc/spark-tunnel/id_ed25519 -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=/etc/spark-tunnel/known_hosts -o ExitOnForwardFailure=yes -o ServerAliveInterval=15 -o ServerAliveCountMax=3 -L 127.0.0.1:15432:127.0.0.1:15432 -L 127.0.0.1:18900:127.0.0.1:8900 -R 127.0.0.1:18900:127.0.0.1:8900 spark-tunnel@3.107.48.147
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

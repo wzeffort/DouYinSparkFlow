@@ -1,0 +1,58 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="/static/referrals.css?v=20261010-ui1">
+<div class="referral-page">
+<header class="referral-hero">
+  <div><span class="referral-eyebrow">好友邀请计划</span><h1>一起续火，奖励一起拿</h1><p>每邀请一位有效好友，双方都能获得额外使用天数。</p></div>
+  <div class="referral-reward"><strong>+{{ [next_reward, reward_remaining]|min }}<small>天</small></strong><span>下一位好友给你的奖励</span></div>
+</header>
+{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+<div class="referral-stats">
+  <div><span>已注册好友</span><strong>{{ registered }}<small>人</small></strong></div>
+  <div><span>奖励已到账</span><strong>{{ count }}<small>人</small></strong></div>
+  <div><span>累计获得</span><strong>{{ days }}<small>天</small></strong></div>
+</div>
+<div class="referral-columns">
+<section class="panel referral-share">
+  <div class="referral-section-title"><h2>邀请好友</h2><span class="referral-tag">本次档位 +{{ next_reward }} 天</span></div>
+  <p class="referral-summary">前 3 位奖励 9、10、11 天；第 4 位起每次增加 3 天，最高 30 天。</p>
+  {% if is_admin %}
+  <a class="button" href="/admin">前往后台创建邀请码</a>
+  {% elif not qq_verified %}
+  <div class="referral-gate"><strong>先验证 QQ 邮箱</strong><p>使用数字 QQ 号@qq.com 完成邮箱验证。</p><a class="button" href="/settings/email">去验证邮箱 →</a></div>
+  {% elif generated_count >= 3 and douyin_state %}
+  <div class="referral-gate"><strong>{{ '抖音账号已被其他用户使用' if douyin_state == 'douyin_reused' else '还差一步：核验抖音账号' }}</strong><p>{{ '请绑定属于你、未被其他用户用于活动的账号。' if douyin_state == 'douyin_reused' else '你已生成 3 个邀请码，从第 4 个起需扫码核验。' }}</p><a class="button" href="/accounts">{{ '更换抖音账号' if douyin_state == 'douyin_reused' else '去扫码核验' }} →</a></div>
+  {% else %}
+  <form method="post" action="/invitations"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">生成邀请码</button></form>
+  {% endif %}
+  <p class="referral-hint">一人一码 · 7 天有效 · 每天最多 20 个</p>
+  {% if generated_count < 3 and douyin_state and not is_admin %}<p class="referral-hint">还可生成 {{ 3-generated_count }} 个免抖音核验邀请码；领取奖励前仍需核验。</p>{% endif %}
+  {% if incoming %}<p class="referral-incoming">{% if incoming.rewarded_at %}你的受邀奖励已到账：+{{ incoming.friend_days }} 天{% else %}你已通过好友邀请注册，完成 QQ 与抖音核验后自动发奖。{% endif %}</p>{% endif %}
+  <p class="referral-hint">活动奖励累计 {{ reward_total }} / 90 天 · 剩余可领 {{ reward_remaining }} 天</p>
+  <details class="referral-rules"><summary>奖励规则</summary><p>双方均需验证数字 QQ 邮箱，并扫码绑定抖音账号。同一 QQ、同一抖音账号不能重复参与，换绑或删除账号不会重置记录。</p><p>奖励累加到基础额度，过期则从发奖当天续算；任务数量不变，无限期额度保持无限期。基础额度被撤销或不可用时不发奖，老好友不补差。双方按本次档位领奖，各自累计活动奖励最多 90 天（含历史及受邀奖励），最后一次只补足剩余额度；达到上限后不再增加天数。</p></details>
+</section>
+<section class="panel referral-codes"><div class="referral-section-title"><h2>我的邀请码</h2><span class="muted">最近 20 个</span></div>
+{% for item in invitations %}
+<div class="referral-code">
+<div class="referral-section-title"><span class="referral-tag">{{ item.status }}</span><small class="muted">{{ item.expires | shanghai_time }} 到期</small></div>
+{% if item.link %}<label>邀请链接<div class="referral-copy"><input id="invite-link-{{ loop.index }}" readonly value="{{ item.link }}" aria-label="邀请链接"><button type="button" class="quiet" data-copy-invite="invite-link-{{ loop.index }}">复制链接</button></div></label><details><summary>查看邀请码</summary><input readonly value="{{ item.code }}" aria-label="邀请码"></details>{% endif %}
+</div>
+{% else %}<div class="referral-empty"><span class="referral-empty-icon" aria-hidden="true">↗</span><h3>第一位好友，从这里开始</h3><p>生成邀请码后，复制链接分享给好友。</p></div>{% endfor %}
+</section>
+</div>
+<section class="panel referral-history"><div class="referral-section-title"><h2>邀请记录</h2><span class="muted">注册与到账进度</span></div>
+{% for item,outcome,friend_name in history %}
+<article class="item"><div><h3>{{ friend_name or (outcome.friend_name if outcome else '好友') }}{% if not friend_name %}（账号已删除）{% endif %}</h3>
+<p>注册成功 · {{ item.created_at | shanghai_time }}</p>
+{% if item.rewarded_at %}<p><strong>邀请成功，奖励已核算</strong> · 你 {% if item.inviter_days %}+{{ item.inviter_days }} 天{% else %}已达 90 天上限{% endif %}，好友 {% if item.friend_days %}+{{ item.friend_days }} 天{% else %}已达 90 天上限{% endif %}</p><p class="muted">到账时间：{{ item.rewarded_at|shanghai_time }}</p>
+{% elif outcome and outcome.status == 'blocked' %}<p><strong>已注册，奖励未发放</strong></p><p class="muted">{% if outcome.reason in ['douyin_reused','inviter_douyin_reused'] %}绑定的抖音账号已被其他用户使用，不能重复领取奖励。{% elif outcome.reason == 'qq_reused' %}好友的 QQ 已参与过活动，不能重复领取奖励。{% elif outcome.reason == 'inviter_quota_unavailable' %}你的基础额度不可用，请联系管理员核查。{% elif outcome.reason == 'friend_quota_unavailable' %}好友的基础额度不可用，请好友联系管理员核查。{% elif outcome.reason == 'account_unavailable' %}相关账号已停用或删除，暂不发放奖励。{% else %}未满足邀请奖励条件，请联系管理员核查。{% endif %}</p>
+{% elif outcome and outcome.reason in ["douyin_pending","inviter_douyin_pending"] %}<p><strong>已注册，等待抖音账号核验</strong></p><p class="muted">{{ "你" if outcome.reason == "inviter_douyin_pending" else "好友" }}需要在“抖音账号”中重新扫码，完成平台账号身份核验。</p>
+{% else %}<p><strong>已注册，等待 QQ 邮箱验证</strong></p><p class="muted">提醒好友在“邮箱与通知”中验证数字 QQ 邮箱，符合条件后双方自动获得奖励。</p>{% endif %}
+</div></article>
+{% else %}<p class="muted">还没有好友完成注册。生成邀请码后，将上方邀请链接分享给好友吧。</p>{% endfor %}
+{% if history_pages>1 %}<nav class="admin-pager" aria-label="我的邀请记录分页">{% if history_page>1 %}<a href="?page={{ history_page-1 }}">上一页</a>{% endif %}<span>第 {{ history_page }} / {{ history_pages }} 页</span>{% if history_page<history_pages %}<a href="?page={{ history_page+1 }}">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+</div>
+<p data-invite-copy-status role="status" aria-live="polite"></p>
+<script defer src="/static/referrals.js?v=20261010"></script>
+{% endblock %}

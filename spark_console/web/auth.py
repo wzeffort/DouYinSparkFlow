@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from spark_console.models import AdminAnnouncement, AnnouncementRecipient, User, UserNotification, WebSession
 from spark_console.services.announcements import AnnouncementService
 from spark_console.security import SessionService
+from spark_console.profile_models import UserProfile
 
 
 def _aware(value: datetime) -> datetime:
@@ -49,6 +50,8 @@ class WebAuth:
 
     @staticmethod
     def _page_context(db: Session, user: User, record: WebSession) -> dict:
+        personal = db.execute(select(UserProfile.nickname, UserProfile.avatar_version).where(
+            UserProfile.user_id == user.id)).first()
         AnnouncementService(db).publish_due()
         unread = db.scalar(
             select(func.count(UserNotification.id)).where(
@@ -62,6 +65,8 @@ class WebAuth:
             "csrf_token": record.csrf_token,
             "is_admin": user.role == "admin",
             "unread_notification_count": unread,
+            "personal_name": personal.nickname if personal and personal.nickname else user.username,
+            "personal_avatar_version": personal.avatar_version if personal else None,
         }
 
     def user_context(

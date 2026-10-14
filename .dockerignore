@@ -4,6 +4,10 @@ __pycache__
 *.pyc
 usersData.json
 .env.console
+.env.ha
+.env
+deploy/shared-db
+production-source-manifest.json
 secrets
 logs
 *.db
@@ -11,3 +15,4 @@ backups
 cloud_sources
 artifacts
 .pytest_cache
+*.bak-*

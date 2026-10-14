@@ -1,0 +1,32 @@
+{% extends 'base.html' %}{% block content %}
+<header class="page-head renewal-head"><div><span class="renewal-kicker">火花守护 · 续卡服务</span><h1>我的续卡</h1><p>续上每天的火花，选一份适合你的时长。</p></div><a class="button quiet" href="/tasks">查看我的任务</a></header>
+<section class="renewal-service-facts" aria-label="任务卡说明"><span><b>1 个名额</b> 对应 1 个任务</span><span><b>最多 5 位好友</b> 每个任务独立设置</span><span><b>核实到账后开通</b> 付款金额以订单为准</span></section>
+{% if not is_admin %}
+<section class="renewal-plans" aria-label="续卡套餐">
+{% for plan in plans %}<article class="panel renewal-plan{% if plan.key == 'year_friend' %} renewal-friend{% endif %}{% if plan.key == 'quarter' %} renewal-recommended{% endif %}">
+<div class="renewal-plan-title"><h2>{{ plan.label }}</h2>{% if plan.badge %}<span class="renewal-plan-badge">{{ plan.badge }}</span>{% else %}<span>{{ plan.days }} 天</span>{% endif %}</div>
+<p class="renewal-price"><small>¥</small>{{ plan.price }}<del aria-label="原价 {{ plan.original }} 元">¥{{ plan.original }}</del></p>
+<p class="renewal-original">原价：8.88 × {{ plan.original_months }} = {{ plan.original }} 元</p>
+<p class="renewal-saving">{{ plan.days }} 天 · 比原价省 {{ plan.saving }} 元</p>
+{% if plan.reason %}<p class="renewal-plan-note">{{ plan.reason }}</p>{% else %}<p class="renewal-plan-note">1 个任务名额，按固定天数计算。</p>{% endif %}
+{% if plan.key == 'year_friend' %}<p class="renewal-eligibility">已成功邀请 {{ referral_count }} 位好友</p>{% endif %}
+{% if plan.resume_order_id %}<a class="button renewal-resume" href="/renewal/orders/{{ plan.resume_order_id }}">继续待处理订单 →</a>{% else %}
+<form method="post" action="/renewal/orders" data-once><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="plan" value="{{ plan.key }}">
+<label>开通方式<select name="grant"><option value="">新增 1 个名额</option>{% for g in grants %}<option value="{{ g.id }}"{% if selected_grant == g.id %} selected{% endif %}>续期 {{ g.label }} · 至 {{ g.expires_at|shanghai_time }}</option>{% endfor %}</select></label>
+<div class="renewal-pay-buttons"><button name="channel" value="wechat"{% if not plan.eligible %} disabled{% endif %}>微信付款</button><button name="channel" value="alipay" class="quiet"{% if not plan.eligible %} disabled{% endif %}>支付宝付款</button></div></form>
+{% if not plan.eligible %}<a class="renewal-offer-link" href="{{ '/invitations' if referral_count < 2 else '/renewal#annual-rules' }}">{{ '去邀请好友 →' if referral_count < 2 else '查看后续年卡规则 →' }}</a>{% endif %}{% endif %}
+</article>{% endfor %}
+</section>{% else %}<section class="panel"><p>管理员无需购买任务额度。</p><a class="button" href="/admin/renewals">管理订单和收款码</a></section>{% endif %}
+<section class="panel renewal-guide" aria-labelledby="payment-rules"><div class="renewal-section-heading"><div><span class="renewal-kicker">三步完成续卡</span><h2 id="payment-rules">付款与开通规则</h2></div><span class="renewal-guide-tag">微信 / 支付宝</span></div>
+<div class="renewal-steps">
+<article><span class="renewal-step-index">1</span><h3>选好套餐</h3><p>选择时长和支付方式，可新增名额，也可为已有的单个限时名额续期。</p></article>
+<article><span class="renewal-step-index">2</span><h3>按订单金额付款</h3><p>打开收款码，手动输入订单金额，确认金额后支付，并保留付款截图。</p></article>
+<article><span class="renewal-step-index">3</span><h3>提交后等待核实</h3><p>点击“我已付款，提交核实”。管理员核实到账后，会按订单套餐开通。</p></article>
+</div><div class="renewal-support"><div><span>付款后联系</span><strong>QQ 718868371</strong></div><p>请发送 <b>订单号、网站用户名和付款截图</b>，方便核对收款记录。</p></div>
+<p class="renewal-payment-hint">普通收款码不能自动确认到账，也不能锁定输入金额。“已提交”表示等待核实，请勿重复付款。</p></section>
+<section class="panel renewal-guide" id="annual-rules" aria-labelledby="annual-rule-title"><div class="renewal-section-heading"><div><span class="renewal-kicker">优惠用得明白</span><h2 id="annual-rule-title">年卡与好友优惠</h2></div><a href="/invitations">查看邀请进度 →</a></div>
+<div class="renewal-offer-rules"><article><span class="renewal-rule-label">普通年卡</span><h3>首张 <strong>66 元</strong></h3><p>首次购买年卡享 66 元。后续购买恢复 80 元；成功邀请至少 1 位好友后，后续年卡可继续享 66 元。</p></article><article><span class="renewal-rule-label">好友优惠年卡 · 每人一次</span><h3><strong>58.08 元</strong><small>66 × 8.8 折</small></h3><p>成功邀请至少 2 位好友可购买一次。核实开通后机会即用完，后续年卡按 66 元购买。</p></article></div>
+<p class="renewal-payment-hint">只统计已完成奖励核验的好友：双方需通过数字 QQ 邮箱和抖音账号核验，重复身份不计入。一次性优惠会为待处理订单预留；核实未通过时释放，核实开通后不可重复使用。</p></section>
+<section class="panel renewal-duration"><h2>有效期怎样计算？</h2><div class="renewal-duration-grid"><div><span>已有名额未到期</span><strong>从原到期日延长</strong><p>剩余天数保留。</p></div><div><span>名额已到期 / 新购</span><strong>从核实开通时开始</strong><p>每份订单开通或续期 1 个名额。</p></div><div><span>已经暂停的任务</span><strong>开通后手动启用</strong><p>不补发过期期间的消息。</p></div></div><p class="renewal-payment-hint">月卡 30 天，两个月卡 60 天，季卡 90 天，年卡 365 天；整组额度续期请联系管理员。</p></section>
+<section class="panel"><div class="panel-head"><h2>我的订单</h2><span>最近 20 笔</span></div>{% for order in orders %}<div class="renewal-order-row"><div><strong>{{ labels[order.plan_key][0] }} · ¥{{ '%.2f'|format(order.price_cents / 100) }}</strong><p>{{ {'cancelled':'已取消','pending':'等待付款','submitted':'已提交，待核实','approved':'已核实开通','rejected':'未通过核实','fulfilling':'处理中'}.get(order.status, '处理中') }} · {{ order.created_at|shanghai_time }}</p></div><a href="/renewal/orders/{{ order.id }}">查看订单 →</a></div>{% else %}<div class="renewal-no-orders"><strong>还没有续卡订单</strong><p>选好上方套餐后，订单和开通进度会显示在这里。</p></div>{% endfor %}</section>
+{% endblock %}

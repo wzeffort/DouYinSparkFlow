@@ -112,4 +112,22 @@ class ResendTransport:
                 f"<p>{reason}</p><p><a href='{url}'>查看并编辑任务</a></p>"
                 "<p>邮件中不包含消息内容、Cookie 或完整账号凭据。</p>",
             )
+        if template_key == "quota_migrated":
+            target = html.escape(str(payload.get("target_name", "目标好友")))
+            label = html.escape(str(payload.get("card_label", "新的有效额度")))
+            expiry = html.escape(str(payload.get("expires_at", "长期有效")))
+            return (
+                "任务额度已自动切换",
+                f"<h2>任务额度已自动切换</h2><p>好友“{target}”所在任务的原额度已到期，"
+                f"系统已自动切换至“{label}”，任务继续按原计划运行。</p>"
+                f"<p>新额度有效至：{expiry}。切换不会延长额度有效期。</p>"
+                f"<p><a href='{html.escape(self.public_base_url + '/tasks', quote=True)}'>查看任务与额度</a></p>",
+            )
+        if template_key == "renewal_submitted":
+            values = {key: html.escape(str(payload.get(key, ""))) for key in ("username", "order_id", "plan", "amount", "channel")}
+            return ("续卡付款待核实 · " + values["username"],
+                    f"<h2>用户已提交付款确认，请核实到账</h2><p>用户：{values['username']}</p>"
+                    f"<p>订单：{values['order_id']}</p><p>套餐：{values['plan']}，金额：¥{values['amount']}，方式：{values['channel']}</p>"
+                    "<p>这是用户自行提交的付款声明，尚未确认收款，额度未开通。请核对收款记录后在后台审核。</p>"
+                    f"<p><a href='{html.escape(self.public_base_url + '/admin/renewals?order=' + str(payload.get('order_id', '')), quote=True)}'>查看待核实订单</a></p>")
         raise ValueError("unsupported email template")

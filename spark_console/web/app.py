@@ -64,6 +64,9 @@ from spark_console.web.recipient_review_routes import build_recipient_review_rou
 from spark_console.services.user_directory import UserDirectoryService
 from spark_console.web.registration_routes import registration_client_key
 from spark_console.web.security_headers import SecurityBoundaryMiddleware
+from spark_console.web.renewal_routes import build_renewal_router
+from spark_console.web.profile_routes import build_profile_router
+from spark_console.services.profiles import ProfileService
 from spark_console.web.contact_routes import build_contact_router
 
 
@@ -93,6 +96,7 @@ RUN_STAGE_LABELS = {
     "submitted": "已提交发送",
     "claimed": "已领取",
     "complete": "已完成",
+    "page_confirmed": "成功（页面确认）",
     "missed_startup": "执行器离线",
     "late": "超过发送窗口",
     "clock_check": "时间校验",
@@ -221,6 +225,11 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.engine = engine
+    @app.middleware('http')
+    async def standby_read_only(request, call_next):
+        if settings.standby_mode and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+            return JSONResponse({'detail': 'Standby deployment awaiting database cutover'}, status_code=503)
+        return await call_next(request)
     app.mount("/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static")
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
@@ -254,6 +263,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     def page(request: Request, name: str, status_code: int = 200, **context):
         context.setdefault("email_enabled", settings.email_enabled)
+        context.setdefault("push_enabled", settings.push_enabled)
         return templates.TemplateResponse(
             request=request, name=name, context=context, status_code=status_code
         )
@@ -413,12 +423,23 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             pii, settings.email_enabled,
         )
     )
-    app.include_router(build_account_scan_router(engine, auth, cipher))
+    app.include_router(build_account_scan_router(engine, auth, cipher, pii=pii))
+    app.include_router(build_renewal_router(engine, auth, pii, page))
+    app.include_router(build_profile_router(engine, auth, passwords, pii, page))
     app.include_router(build_announcement_router(engine, auth, page))
     app.include_router(build_retry_router(engine, auth, page, task_write_lock))
     app.include_router(build_recipient_review_router(engine, auth, page, task_write_lock))
     if pii is not None:
         app.include_router(build_email_router(engine, auth, passwords, pii, page))
+        from spark_console.web.referral_routes import build_referral_router
+        from spark_console.services.referrals import ReferralService
+        with session_scope(engine) as db:
+            ReferralService(db, pii).seed_existing()
+        app.include_router(build_referral_router(engine, auth, pii, cipher, page, settings.public_base_url))
+    if settings.push_enabled and settings.pii_key_file is not None:
+        from spark_console.web.push_routes import build_push_router
+        push_pii = PiiCipher(settings.pii_key_file.read_bytes())
+        app.include_router(build_push_router(engine, auth, push_pii, page))
 
     @app.exception_handler(401)
     async def unauthorized(request: Request, _exc):
@@ -442,6 +463,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def ready():
         with engine.connect() as connection:
             connection.exec_driver_sql("SELECT 1")
+        if settings.standby_mode:
+            return JSONResponse({'status': 'standby', 'database': 'connected'}, status_code=503)
         return {"status": "ready"}
 
     @app.get("/")
@@ -544,6 +567,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def change_password_page(request: Request):
         with session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
+            if not user.must_change_password:
+                return RedirectResponse('/profile#password', 303)
             return page(
                 request,
                 "change_password.html",
@@ -565,33 +590,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with auth.mutation_lock, session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
             auth.csrf(record, csrf_token)
-            if not passwords.verify(user.password_hash, current_password):
-                return page(
-                    request,
-                    "change_password.html",
-                    400,
-                    title="修改密码",
-                    nav=not user.must_change_password,
-                    user=user,
-                    csrf_token=record.csrf_token,
-                    is_admin=user.role == "admin",
-                    error="当前密码错误",
-                )
-            if new_password != new_password_confirmation:
-                return page(
-                    request,
-                    "change_password.html",
-                    400,
-                    title="修改密码",
-                    nav=not user.must_change_password,
-                    user=user,
-                    csrf_token=record.csrf_token,
-                    is_admin=user.role == "admin",
-                    error="两次输入的新密码不一致",
-                )
             try:
-                user.password_hash = passwords.hash(new_password)
-            except ValueError:
+                ProfileService(db, passwords, AuditService(db)).change_password(
+                    user, current_password, new_password, new_password_confirmation)
+            except ValidationError as error:
                 return page(
                     request,
                     "change_password.html",
@@ -601,12 +603,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     user=user,
                     csrf_token=record.csrf_token,
                     is_admin=user.role == "admin",
-                    error="新密码至少需要 12 位",
+                    error=str(error),
                 )
-            user.must_change_password = False
-            user.failed_login_count = 0
-            user.locked_until = None
-            db.query(WebSession).filter(WebSession.user_id == user.id).delete(synchronize_session=False)
             raw, fresh_session = sessions.create_record(user.id)
             db.add(fresh_session)
         response = RedirectResponse("/dashboard", status_code=303)
@@ -655,6 +653,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def accounts_page(request: Request):
         with session_scope(engine) as db:
             user, _record, context = auth.user_context(request, db)
+            if pii is not None:
+                from spark_console.services.referrals import ReferralService
+                ReferralService(db, pii).review_bindings(user)
             accounts = AccountService(db, cipher, AuditService(db)).list_owned(user.id)
             return page(request, "accounts.html", title="抖音账号", accounts=accounts, **context)
 

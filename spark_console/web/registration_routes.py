@@ -34,9 +34,7 @@ FIELD_BY_MESSAGE = {
     "该用户名不可用，请更换": "username",
     "请输入有效的邮箱地址": "email",
     "该邮箱不可用，请更换": "email",
-    "密码至少需要 12 位": "password",
-    "密码必须包含至少一个字母": "password",
-    "密码必须包含至少一个数字": "password",
+    "密码至少需要 9 位": "password",
     "两次输入的密码不一致": "password_confirmation",
     "邀请码不存在，请检查后重试": "invite_code",
     "邀请码已被使用": "invite_code",
@@ -98,7 +96,8 @@ def build_registration_router(
     def register_page(request: Request):
         return page(
             request, "register.html", title="注册", nav=False,
-            email_enabled=email_enabled, field_errors={}, form_values={},
+            email_enabled=email_enabled, field_errors={},
+            form_values={"invite_code": request.query_params.get("invite", "")[:128]},
         )
 
     @router.post("/register")
@@ -142,9 +141,11 @@ def build_registration_router(
                         username, password, "user"
                     )
                     user.must_change_password = False
-                    InviteService(db, AuditService(db), cipher).consume(
-                        invite_code, user.id
-                    )
+                    invite = InviteService(db, AuditService(db), cipher).for_registration(invite_code) if invite_code.strip() else None
+                    if invite is not None:
+                        InviteService(db, AuditService(db), cipher).consume_id(invite.id, user.id)
+                    from spark_console.registration_trials import apply_registration_trial
+                    apply_registration_trial(db, user, invite.id if invite else None, datetime.now(timezone.utc))
         except (ValidationError, Conflict, IntegrityError, ValueError) as exc:
             limiter.record_failure(key)
             message = str(exc)

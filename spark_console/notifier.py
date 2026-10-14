@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import signal
 import socket
@@ -14,12 +15,13 @@ from spark_console.resend import ResendTransport
 from spark_console.services.audits import AuditService
 from spark_console.services.email_verification import EmailVerificationService
 from spark_console.services.notifications import NotificationService
+from spark_console.push_notifier import PushNotifier
 
 
 class Notifier:
     def __init__(self, settings: Settings, engine, transport=None):
-        if not settings.email_enabled or settings.pii_key_file is None:
-            raise ValueError("email notifier is disabled")
+        if not (settings.email_enabled or settings.push_enabled) or settings.pii_key_file is None:
+            raise ValueError("notification service is disabled")
         self.settings = settings
         self.engine = engine
         self.pii = PiiCipher(settings.pii_key_file.read_bytes())
@@ -28,12 +30,31 @@ class Notifier:
         )
         self.worker_id = f"{socket.gethostname()}-{os.getpid()}"
         self._last_cleanup_date = None
+        self.push = PushNotifier(settings, engine) if settings.push_enabled else None
 
     def run_once(self, now=None) -> bool:
+        from spark_console.cluster import exclusive, NOTIFIER_LOCK
+        with exclusive(self.engine, NOTIFIER_LOCK) as connection:
+            if connection is False:
+                return False
+            return self._run_once(now)
+
+    def _run_once(self, now=None) -> bool:
         current = now or datetime.now(timezone.utc)
+        pushed = False
+        if self.push:
+            try:
+                pushed = self.push.run_once(current)
+            except Exception:
+                # A push queue failure must not stop password/verification emails.
+                # Avoid logging provider bodies or credentials from exceptions.
+                logging.getLogger(__name__).error("Push notification cycle failed")
+        if not self.settings.email_enabled:
+            return pushed
         with session_scope(self.engine) as db:
             service = NotificationService(db, self.pii, AuditService(db))
             service.recover_stale(current)
+            service.enqueue_quota_migration_emails(current)
             if self._last_cleanup_date != current.date():
                 EmailVerificationService(
                     db, None, self.pii, AuditService(db)  # cleanup does not use passwords
@@ -41,7 +62,7 @@ class Notifier:
                 self._last_cleanup_date = current.date()
             event = service.claim_due(self.worker_id, current)
             if event is None:
-                return False
+                return pushed
             event_id = event.id
             recipient = service.recipient_for(event)
             template_key = event.template_key
@@ -61,6 +82,8 @@ class Notifier:
 
 def run_loop() -> None:
     settings = Settings.from_env(os.environ)
+    if settings.standby_mode:
+        raise RuntimeError('standby deployment cannot send notifications')
     engine = create_engine_for(settings)
     create_schema(engine)
     notifier = Notifier(settings, engine)

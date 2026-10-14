@@ -195,10 +195,11 @@ def run_job_process(command, timeout, stopping, heartbeat=lambda: None, inherite
 
 
 def admit_and_run(slot, command, timeout, stopping, probe, heartbeat=lambda: None,
-                  admitted=lambda: None):
+                  admitted=lambda: None, reconcile=lambda: None):
     if not slot.acquire():
         return 'browser_busy'
     try:
+        reconcile()
         reason = probe()
         if reason:
             return reason
@@ -216,11 +217,22 @@ def admit_and_run(slot, command, timeout, stopping, probe, heartbeat=lambda: Non
 
 def has_pending(db, role, now):
     from sqlalchemy import select, or_
-    from spark_console.models import DouyinLoginSession, SparkTask, TaskRun, ScanStatus
+    from spark_console.models import ContactSyncState, DouyinLoginSession, SparkTask, TaskRun, ScanStatus
     if role == 'auth':
         # Also give the child a chance to reconcile abandoned scan state.
-        return db.scalar(select(DouyinLoginSession.id).where(
-            DouyinLoginSession.slot == 'global').limit(1)) is not None
+        if db.scalar(select(DouyinLoginSession.id).where(
+            DouyinLoginSession.slot == 'global').limit(1)) is not None:
+            return True
+        sync = db.scalar(select(ContactSyncState).where(ContactSyncState.status.in_(('queued','running'))).limit(1))
+        if sync is None:
+            return False
+        # Allow reconciliation even while a task is due; it opens no browser.
+        requested = sync.requested_at.replace(tzinfo=timezone.utc) if sync.requested_at.tzinfo is None else sync.requested_at
+        if sync.status == 'running' or requested <= now-timedelta(minutes=15):
+            return True
+        return (db.scalar(select(TaskRun.id).where(TaskRun.status=='running').limit(1)) is None
+                and db.scalar(select(SparkTask.id).where(SparkTask.enabled.is_(True),
+                    SparkTask.douyin_account_id.is_not(None), SparkTask.next_run_at <= now+timedelta(seconds=100)).limit(1)) is None)
     if role != 'worker':
         raise ValueError('unknown browser role')
     if db.scalar(select(TaskRun.id).where(TaskRun.status == 'running').limit(1)):
@@ -237,12 +249,15 @@ def run_supervisor(role):
     if role not in {'worker', 'auth'} or sys.platform != 'linux':
         raise RuntimeError('unsupported supervisor deployment')
     settings = Settings.from_env(os.environ)
+    if settings.standby_mode:
+        raise RuntimeError('standby deployment cannot execute background jobs')
     engine = create_engine_for(settings)
     create_schema(engine)
     singleton = BrowserSlot(settings.data_dir / (role + '-supervisor.lock'))
     if not singleton.acquire():
         raise RuntimeError('supervisor already running')
-    slot = BrowserSlot(settings.data_dir / 'browser-runtime.lock')
+    from spark_console.cluster import ClusterBrowserSlot
+    slot = ClusterBrowserSlot(BrowserSlot(settings.data_dir / 'browser-runtime.lock'), engine)
     stopping = False
     def stop(*_):
         nonlocal stopping
@@ -251,7 +266,13 @@ def run_supervisor(role):
         signal.signal(signum, stop)
     boot_time = datetime.now(timezone.utc)
     last_state = None
+    def reconcile():
+        if role == 'auth':
+            from spark_console.services.contacts import ContactSyncService
+            with session_scope(engine) as db:
+                ContactSyncService(db).recover()
     def heartbeat():
+        slot.check()
         if role == 'worker':
             with session_scope(engine) as db:
                 row = db.get(WorkerLock, 1)
@@ -283,7 +304,7 @@ def run_supervisor(role):
                     outcome = admit_and_run(slot, command, 210 if role == 'worker' else 330,
                                             lambda: stopping, lambda: resource_reason(settings.data_dir),
                                             lambda: (heartbeat(), status('running')),
-                                            lambda: status('running'))
+                                            lambda: status('running'), reconcile=reconcile)
                     status(outcome)
                 else:
                     status('idle')

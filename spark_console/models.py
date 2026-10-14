@@ -91,6 +91,7 @@ class TaskQuotaGrant(Base):
             "user_id",
             unique=True,
             sqlite_where=text("is_initial = 1"),
+            postgresql_where=text("is_initial IS TRUE"),
         ),
     )
 
@@ -257,6 +258,7 @@ class SparkTask(Base):
             "send_time",
             unique=True,
             sqlite_where=text("enabled = 1"),
+            postgresql_where=text("enabled IS TRUE"),
         ),
     )
 
@@ -443,8 +445,8 @@ class PendingRegistration(Base):
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_string)
     username: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
     password_hash: Mapped[str] = mapped_column(Text, nullable=False)
-    invite_id: Mapped[str] = mapped_column(
-        ForeignKey("invite_codes.id", ondelete="CASCADE"), nullable=False, index=True
+    invite_id: Mapped[str | None] = mapped_column(
+        ForeignKey("invite_codes.id", ondelete="CASCADE"), nullable=True, index=True
     )
     email_ciphertext: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     email_nonce: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)

@@ -1,0 +1,13 @@
+# AWS only: a dedicated OS account and public key, without shell sessions.
+# Validate with sshd -t before any explicitly authorized reload.
+Match User spark-tunnel
+    PasswordAuthentication no
+    AuthenticationMethods publickey
+    AllowTcpForwarding yes
+    PermitOpen 127.0.0.1:15432 127.0.0.1:8900
+    PermitListen 127.0.0.1:18900
+    GatewayPorts no
+    AllowAgentForwarding no
+    X11Forwarding no
+    PermitTTY no
+    MaxSessions 0

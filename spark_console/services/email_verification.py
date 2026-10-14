@@ -4,11 +4,12 @@ import hashlib
 import secrets
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
 
 from spark_console.models import (
     EmailVerificationRequest,
+    AuditEvent,
     InviteCode,
     NotificationPreference,
     PendingRegistration,
@@ -17,6 +18,8 @@ from spark_console.models import (
 )
 from spark_console.pii import PiiCipher, normalize_email
 from spark_console.security import PasswordService
+from spark_console.profile_models import EmailBindingProof
+from spark_console.services.profiles import ProfileService
 from spark_console.services import Conflict, ValidationError
 from spark_console.services.audits import AuditService
 from spark_console.services.invites import InviteService
@@ -81,7 +84,7 @@ class EmailVerificationService:
             raise Conflict("该用户名不可用，请更换")
         if self.session.scalar(select(User.id).where(User.email_lookup_hash == lookup)):
             raise Conflict("该邮箱不可用，请更换")
-        invite = InviteService(self.session, self.audit).for_registration(invite_code)
+        invite = InviteService(self.session, self.audit).for_registration(invite_code) if invite_code.strip() else None
         recent = self.session.scalar(
             select(func.count(PendingRegistration.id)).where(
                 PendingRegistration.email_lookup_hash == lookup,
@@ -99,7 +102,7 @@ class EmailVerificationService:
             id=pending_id,
             username=name,
             password_hash=self.passwords.hash(password),
-            invite_id=invite.id,
+            invite_id=invite.id if invite else None,
             email_ciphertext=encrypted,
             email_nonce=nonce,
             email_lookup_hash=lookup,
@@ -149,28 +152,33 @@ class EmailVerificationService:
             pending.email_nonce,
             aad=f"pending:{pending.id}".encode(),
         )
-        user_id = secrets.token_hex(16)
-        ciphertext, nonce = self.pii.encrypt_email(email, aad=f"user:{user_id}".encode())
-        user = User(
-            id=user_id,
-            username=pending.username,
-            password_hash=pending.password_hash,
-            role="user",
-            must_change_password=False,
-            email_ciphertext=ciphertext,
-            email_nonce=nonce,
-            email_lookup_hash=pending.email_lookup_hash,
-            email_verified_at=current,
-            email_updated_at=current,
-        )
-        self.session.add(user)
-        self.session.flush()
-        InviteService(self.session, self.audit).consume_id(pending.invite_id, user.id)
-        TaskCapacityService(self.session, self.audit).bootstrap_user(user, use_current_policy=True)
-        self.session.add(NotificationPreference(user_id=user.id))
-        self.audit.write(user.id, "user.registered", "user", user.id)
-        self.session.delete(pending)
-        return user
+        with self.session.begin_nested():
+            user_id = secrets.token_hex(16)
+            ciphertext, nonce = self.pii.encrypt_email(email, aad=f"user:{user_id}".encode())
+            user = User(
+                id=user_id,
+                username=pending.username,
+                password_hash=pending.password_hash,
+                role="user",
+                must_change_password=False,
+                email_ciphertext=ciphertext,
+                email_nonce=nonce,
+                email_lookup_hash=pending.email_lookup_hash,
+                email_verified_at=current,
+                email_updated_at=current,
+            )
+            self.session.add(user)
+            self.session.flush()
+            if pending.invite_id is not None:
+                InviteService(self.session, self.audit).consume_id(pending.invite_id, user.id)
+            from spark_console.registration_trials import apply_registration_trial
+            apply_registration_trial(self.session, user, pending.invite_id, current)
+            from spark_console.services.referrals import ReferralService
+            ReferralService(self.session, self.pii).verified(user, current)
+            self.session.add(NotificationPreference(user_id=user.id))
+            self.audit.write(user.id, "user.registered", "user", user.id)
+            self.session.delete(pending)
+            return user
 
     def resend_registration(
         self, pending_id: str, client_key: str, now: datetime | None = None
@@ -221,14 +229,24 @@ class EmailVerificationService:
         return int(pending or 0) + int(requests or 0)
 
     def start_binding(
-        self, user_id: str, email: str, now: datetime | None = None
+        self, user_id: str, email: str, now: datetime | None = None,
+        *, current_password: str = ''
     ) -> EmailVerificationRequest:
         current = now or utc_now()
         user = self.session.get(User, user_id)
         if user is None:
             raise ValidationError("用户不存在")
+        profiles = ProfileService(self.session, self.passwords, self.audit)
+        profiles.verify_current_password(user, current_password, current)
         normalized = normalize_email(email)
         lookup = self.pii.lookup_hash(normalized)
+        replacing = user.email_verified_at is not None
+        if replacing:
+            if lookup == user.email_lookup_hash:
+                raise ValidationError('该邮箱已经绑定，无需重复验证')
+            old_email = self.email_for_user(user)
+            if not old_email:
+                raise ValidationError('旧邮箱不可用，请联系管理员核实身份后处理')
         duplicate = self.session.scalar(
             select(User.id).where(
                 User.email_lookup_hash == lookup,
@@ -237,8 +255,14 @@ class EmailVerificationService:
         )
         if duplicate:
             raise Conflict("该邮箱已绑定其他账号")
+        sends = list(self.session.scalars(select(AuditEvent.created_at).where(
+            AuditEvent.actor_user_id == user_id, AuditEvent.action == 'email.binding_requested',
+            AuditEvent.created_at > current - timedelta(hours=1))))
+        if len(sends) >= 3 or any(_aware(sent) + self.RESEND_COOLDOWN > _aware(current) for sent in sends):
+            raise ValidationError('验证码每 60 秒可发送一次，每小时最多 3 次，请稍后再试')
         self.session.query(EmailVerificationRequest).filter(
             EmailVerificationRequest.user_id == user_id,
+            EmailVerificationRequest.purpose == 'bind',
             EmailVerificationRequest.consumed_at.is_(None),
         ).update({EmailVerificationRequest.consumed_at: current})
         request_id = secrets.token_hex(16)
@@ -261,6 +285,17 @@ class EmailVerificationService:
         )
         self.session.add(request)
         self.session.flush()
+        old_code = self.code_factory() if replacing else None
+        while old_code is not None and old_code == code:
+            old_code = f'{secrets.randbelow(1_000_000):06d}'
+        self.session.add(EmailBindingProof(
+            request_id=request.id, source_email_lookup_hash=user.email_lookup_hash,
+            source_password_tag=hashlib.sha256(user.password_hash.encode()).hexdigest(),
+            old_code_hash=self.pii.code_hash(f'bind-old:{request.id}', old_code) if old_code else None))
+        if old_code:
+            NotificationService(self.session, self.pii, self.audit).enqueue_template(
+                user_id, 'email_verification', old_email, 'verify_email',
+                {'code': old_code, 'username': user.username}, f'bind:{request.id}:old', now=current)
         NotificationService(self.session, self.pii, self.audit).enqueue_template(
             user_id,
             "email_verification",
@@ -270,6 +305,7 @@ class EmailVerificationService:
             f"bind:{request.id}:1",
             now=current,
         )
+        self.audit.write(user.id, 'email.binding_requested', 'user', user.id).created_at = current
         return request
 
     def verify_binding(
@@ -278,19 +314,36 @@ class EmailVerificationService:
         request_id: str,
         code: str,
         now: datetime | None = None,
+        *, old_code: str = '',
     ) -> User:
         current = now or utc_now()
+        user = self.session.get(User, user_id)
+        if user is None:
+            raise ValidationError('验证码无效或已过期')
+        ProfileService(self.session, self.passwords, self.audit).lock_user(user)
         request = self.session.get(EmailVerificationRequest, request_id)
+        if request is not None:
+            self.session.refresh(request)
         if (
             request is None
             or request.user_id != user_id
+            or request.purpose != 'bind'
             or request.consumed_at is not None
             or _aware(request.expires_at) <= _aware(current)
             or _aware(request.code_expires_at) <= _aware(current)
             or request.failed_attempts >= self.MAX_ATTEMPTS
         ):
             raise ValidationError("验证码无效或已过期")
-        if not self.pii.verify_code(f"bind:{request.id}", code.strip(), request.code_hash):
+        proof = self.session.get(EmailBindingProof, request.id)
+        if proof is None:
+            raise ValidationError('安全验证已升级，请在个人中心重新发起邮箱换绑')
+        if proof and (proof.source_email_lookup_hash != user.email_lookup_hash or
+                proof.source_password_tag != hashlib.sha256(user.password_hash.encode()).hexdigest()):
+            raise ValidationError('账号安全信息已变化，请重新发起邮箱验证')
+        new_valid = self.pii.verify_code(f"bind:{request.id}", code.strip(), request.code_hash)
+        old_valid = not (proof and proof.old_code_hash) or self.pii.verify_code(
+            f'bind-old:{request.id}', old_code.strip(), proof.old_code_hash)
+        if not new_valid or not old_valid:
             request.failed_attempts += 1
             raise ValidationError("验证码无效或已过期")
         duplicate = self.session.scalar(
@@ -301,25 +354,36 @@ class EmailVerificationService:
         )
         if duplicate:
             raise Conflict("该邮箱已绑定其他账号")
-        email = self.pii.decrypt_email(
-            request.email_ciphertext,
-            request.email_nonce,
-            aad=f"email-request:{request.id}".encode(),
-        )
-        user = self.session.get(User, user_id)
-        ciphertext, nonce = self.pii.encrypt_email(
-            email, aad=f"user:{user.id}".encode()
-        )
-        user.email_ciphertext = ciphertext
-        user.email_nonce = nonce
-        user.email_lookup_hash = request.email_lookup_hash
-        user.email_verified_at = current
-        user.email_updated_at = current
-        request.consumed_at = current
-        if self.session.get(NotificationPreference, user.id) is None:
-            self.session.add(NotificationPreference(user_id=user.id))
-        self.audit.write(user.id, "email.verified", "user", user.id)
-        return user
+        with self.session.begin_nested():
+            replacing = user.email_verified_at is not None
+            email = self.pii.decrypt_email(
+                request.email_ciphertext,
+                request.email_nonce,
+                aad=f"email-request:{request.id}".encode(),
+            )
+            user = self.session.get(User, user_id)
+            ciphertext, nonce = self.pii.encrypt_email(
+                email, aad=f"user:{user.id}".encode()
+            )
+            from spark_console.services.referrals import ReferralService
+            referrals = ReferralService(self.session, self.pii)
+            referrals.verified(user, current)
+            user.email_ciphertext = ciphertext
+            user.email_nonce = nonce
+            user.email_lookup_hash = request.email_lookup_hash
+            user.email_verified_at = current
+            user.email_updated_at = current
+            request.consumed_at = current
+            if replacing:
+                ProfileService(self.session, self.passwords, self.audit).revoke_security_requests(user, current)
+                NotificationService(self.session, self.pii, self.audit).create_in_app(
+                    user.id, 'security', '绑定邮箱已更新', '邮箱换绑已完成，其他登录会话已退出。',
+                    '/profile#email', f'email-changed:{request.id}')
+            if self.session.get(NotificationPreference, user.id) is None:
+                self.session.add(NotificationPreference(user_id=user.id))
+            self.audit.write(user.id, "email.verified", "user", user.id)
+            referrals.verified(user, current)
+            return user
 
     def email_for_user(self, user: User) -> str | None:
         if not user.email_ciphertext or not user.email_nonce:
@@ -347,6 +411,12 @@ class EmailVerificationService:
             )
         )
         if user is None:
+            return None
+        changed = self.session.execute(update(User).where(User.id == user.id).values(status=User.status))
+        if not changed.rowcount:
+            return None
+        self.session.refresh(user)
+        if user.status != 'active' or not user.email_verified_at or user.email_lookup_hash != lookup:
             return None
         recent = self.session.scalar(
             select(func.count(EmailVerificationRequest.id)).where(
@@ -401,10 +471,16 @@ class EmailVerificationService:
         new_password: str,
         now: datetime | None = None,
     ) -> User:
-        from spark_console.models import WebSession
-
         current = now or utc_now()
+        owner_id = select(EmailVerificationRequest.user_id).where(
+            EmailVerificationRequest.id == request_id).scalar_subquery()
+        changed = self.session.execute(update(User).where(User.id == owner_id).values(
+            status=User.status).execution_options(synchronize_session=False))
+        if not changed.rowcount:
+            raise ValidationError('验证码无效或已过期')
         request = self.session.get(EmailVerificationRequest, request_id)
+        if request is not None:
+            self.session.refresh(request)
         if (
             request is None
             or request.purpose != "password_reset"
@@ -414,20 +490,23 @@ class EmailVerificationService:
             or request.failed_attempts >= self.MAX_ATTEMPTS
         ):
             raise ValidationError("验证码无效或已过期")
+        user = self.session.get(User, request.user_id)
+        if user is None:
+            raise ValidationError('验证码无效或已过期')
+        self.session.refresh(user)
+        if user.status != 'active' or not user.email_verified_at or user.email_lookup_hash != request.email_lookup_hash:
+            raise ValidationError('验证码无效或已过期')
         if not self.pii.verify_code(
             f"password-reset:{request.id}", code.strip(), request.code_hash
         ):
             request.failed_attempts += 1
             raise ValidationError("验证码无效或已过期")
         validate_registration_password(new_password)
-        user = self.session.get(User, request.user_id)
-        if user is None or user.status != "active":
-            raise ValidationError("验证码无效或已过期")
         user.password_hash = self.passwords.hash(new_password)
         user.must_change_password = False
         user.failed_login_count = 0
         user.locked_until = None
         request.consumed_at = current
-        self.session.query(WebSession).filter(WebSession.user_id == user.id).delete()
+        ProfileService(self.session, self.passwords, self.audit).revoke_security_requests(user, current)
         self.audit.write(user.id, "password.reset_completed", "user", user.id)
         return user

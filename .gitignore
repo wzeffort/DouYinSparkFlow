@@ -6,6 +6,8 @@ logs/
 .DS_Store
 usersData.json
 .env.console
+.env.ha
+.env
 secrets/
 data/
 backups/
@@ -18,3 +20,4 @@ runtime/*.json
 artifacts/
 .pytest_cache/
 *.tar.gz
+*.bak-*

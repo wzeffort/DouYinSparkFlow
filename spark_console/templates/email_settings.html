@@ -29,12 +29,17 @@
       {% else %}
         <div class="email-current-state"><span class="email-state-dot"></span><div><small>尚未绑定</small><strong>现有账号仍可正常使用</strong></div></div>
       {% endif %}
+      {% if email_masked %}
+      <div class="email-bind-form"><p class="profile-security-note">邮箱换绑需要当前密码、新旧邮箱双重验证，请前往个人中心操作。</p><a class="button" href="/profile{% if verification_id %}?verification={{ verification_id }}{% endif %}#email">前往个人中心管理邮箱 ↗</a></div>
+      {% else %}
       <form method="post" action="/settings/email/start" class="email-bind-form">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
         <label for="settings-email">{% if email_masked %}新的邮箱地址{% else %}邮箱地址{% endif %}</label>
         <div class="email-bind-row"><input id="settings-email" type="email" name="email" maxlength="254" autocomplete="email" placeholder="name@example.com" required><button type="submit">发送验证码</button></div>
+        <label for="settings-email-password">当前密码</label><input id="settings-email-password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required>
       </form>
-      {% if verification_id %}
+      {% endif %}
+      {% if verification_id and not email_masked %}
         <div class="inline-verification" id="email-verification" role="region" aria-labelledby="email-verification-title">
           <div class="inline-verification-heading">
             <span class="email-state-dot"></span>

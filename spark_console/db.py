@@ -5,11 +5,15 @@ import os
 import stat
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, text
 from sqlalchemy.orm import Session
 
 from spark_console.config import Settings
 from spark_console.models import AppSetting, Base, TaskQuotaPolicy, WorkerLock
+from spark_console.referral_models import ReferralLock
+from spark_console import push_models
+from spark_console import profile_models
+from spark_console import renewal_models
 
 
 SQLITE_COLUMNS = {
@@ -32,9 +36,14 @@ SQLITE_COLUMNS = {
 
 
 def create_engine_for(settings: Settings) -> Engine:
+    options = {}
+    if settings.database_url.startswith('postgresql'):
+        options = {'connect_timeout': 5, 'options': '-c statement_timeout=15000 -c lock_timeout=10000'}
     engine = create_engine(
         settings.database_url,
-        connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else {},
+        pool_pre_ping=True,
+        hide_parameters=True,
+        connect_args={"check_same_thread": False} if settings.database_url.startswith("sqlite") else options,
     )
     if settings.database_url.startswith("sqlite"):
         @event.listens_for(engine, "connect")
@@ -48,7 +57,15 @@ def create_engine_for(settings: Settings) -> Engine:
 
 
 def create_schema(engine: Engine) -> None:
+    from spark_console.cluster import exclusive, SCHEMA_LOCK
+    with exclusive(engine, SCHEMA_LOCK, wait=True):
+        _create_schema(engine)
+
+
+def _create_schema(engine: Engine) -> None:
     """Create all declared tables additively for fresh and existing databases."""
+    from spark_console.registration_trials import ensure_optional_registration_invites
+    ensure_optional_registration_invites(engine)
     run_additive_migrations(engine)
     Base.metadata.create_all(engine)
     if engine.dialect.name == "sqlite":
@@ -57,7 +74,14 @@ def create_schema(engine: Engine) -> None:
                 "CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_lookup_hash "
                 "ON users(email_lookup_hash) WHERE email_lookup_hash IS NOT NULL"
             )
+    if engine.dialect.name == 'postgresql':
+        with engine.begin() as connection:
+            connection.exec_driver_sql('CREATE UNIQUE INDEX IF NOT EXISTS uq_users_email_lookup_hash ON users(email_lookup_hash) WHERE email_lookup_hash IS NOT NULL')
+            connection.exec_driver_sql('CREATE TABLE IF NOT EXISTS cluster_browser_guard (id INTEGER PRIMARY KEY, blocked_until TIMESTAMPTZ)')
+            connection.exec_driver_sql('INSERT INTO cluster_browser_guard (id) VALUES (1) ON CONFLICT DO NOTHING')
     with session_scope(engine) as session:
+        if session.get(ReferralLock, 1) is None:
+            session.add(ReferralLock(id=1, version=0))
         if session.get(WorkerLock, 1) is None:
             session.add(WorkerLock(id=1))
         if session.get(TaskQuotaPolicy, 1) is None:
@@ -123,6 +147,11 @@ def run_additive_migrations(engine: Engine) -> None:
 def session_scope(engine: Engine):
     session = Session(engine, expire_on_commit=False)
     try:
+        if engine.dialect.name == 'postgresql':
+            # Match the original SQLite single-writer boundary across nodes.
+            # Includes session revocation, quotas, registration and task claims.
+            from spark_console.cluster import TRANSACTION_LOCK
+            session.execute(text('SELECT pg_advisory_xact_lock(:key)'), {'key': TRANSACTION_LOCK})
         yield session
         session.commit()
     except Exception:

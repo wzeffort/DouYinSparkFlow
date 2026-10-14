@@ -15,8 +15,8 @@ class PasswordService:
         self._hasher = PasswordHasher()
 
     def hash(self, password: str) -> str:
-        if len(password) < 12:
-            raise ValueError("password must contain at least 12 characters")
+        if len(password) < 9:
+            raise ValueError("password must contain at least 9 characters")
         return self._hasher.hash(password)
 
     def verify(self, encoded: str, password: str) -> bool:

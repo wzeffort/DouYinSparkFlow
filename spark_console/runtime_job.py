@@ -3,12 +3,17 @@ import asyncio
 from datetime import datetime, timezone
 import os
 import sys
+import signal
 
 
 async def run_once(role, boot_time):
     from spark_console.config import Settings
     from spark_console.db import create_engine_for
+    if sys.platform == "linux":
+        signal.alarm(360)
     settings = Settings.from_env(os.environ)
+    if settings.standby_mode:
+        raise RuntimeError('standby deployment cannot execute background jobs')
     engine = create_engine_for(settings)
     try:
         if role == 'worker':

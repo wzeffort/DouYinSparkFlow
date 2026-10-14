@@ -1,0 +1,38 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="/static/referrals.css?v=20261010-ui1">
+<div class="referral-page referral-admin">
+<header class="referral-heading"><div><span class="referral-eyebrow">邀请管理</span><h1>邀请奖励</h1><p>注册、排行与到账，一目了然。</p></div><a class="button quiet" href="/admin">返回后台</a></header>
+<div class="referral-stats">
+{% for label,value in [('累计注册',totals[0]),('累计到账',totals[1]),('今日注册',totals[2]),('今日到账',totals[3])] %}
+<div><span>{{ label }}</span><strong>{{ value }}<small>人</small></strong></div>
+{% endfor %}
+</div>
+<p class="referral-hint">今日统计：{{ today }} · 北京时间</p>
+<section class="panel referral-ranking"><div class="referral-section-title"><h2>邀请排行榜</h2><span class="referral-tag">TOP 10 · 按到账人数</span></div>
+{% for row in ranking %}<article class="item"><div><strong>{{ loop.index }}. {{ row.username or row.saved_name or '已删除用户' }}{% if not row.username %}（已删除）{% endif %}</strong><p>有效 {{ row.successful }} 人 / 注册 {{ row.registrations }} 人 · 今日注册 {{ row.today_registered }} 人 · 今日入账 {{ row.today_paid }} 人 · 累计奖励 {{ row.days }} 天</p></div><a href="/admin/referrals?q={{ (row.username or row.saved_name or '')|urlencode }}">查看记录</a></article>{% else %}<p class="muted">暂无邀请记录。</p>{% endfor %}</section>
+<section class="panel referral-ledger"><div class="referral-section-title"><h2>邀请与到账明细</h2><span class="muted">{{ total }} 条记录</span></div>
+<form method="get" action="/admin/referrals" class="referral-filters">
+  <input type="search" name="q" value="{{ q }}" placeholder="搜索邀请人或好友用户名" aria-label="搜索用户名" maxlength="64">
+  <select name="period" aria-label="统计范围"><option value="">全部时间</option><option value="registered_today"{% if period=='registered_today' %} selected{% endif %}>今日邀请注册</option><option value="paid_today"{% if period=='paid_today' %} selected{% endif %}>今日奖励入账</option></select>
+  <select name="status" aria-label="到账状态"><option value="">全部状态</option>{% for value,label in status_labels.items() %}<option value="{{ value }}"{% if status==value %} selected{% endif %}>{{ label }}</option>{% endfor %}</select><button class="quiet">筛选</button><a href="/admin/referrals">清除</a>
+</form>
+{% for referral,outcome,inviter_name,friend_name in results %}
+<article class="item"><div>
+<h3>{{ inviter_name or (outcome.inviter_name if outcome else '未知用户') }}{% if not inviter_name %}（已删除）{% endif %} → {{ friend_name or (outcome.friend_name if outcome else '未知用户') }}{% if not friend_name %}（已删除）{% endif %}</h3>
+<p>注册时间：{{ referral.created_at|shanghai_time }} · <strong>{{ status_labels.get(outcome.status, '待核验') if outcome else '待核验' }}</strong></p>
+<p>{{ reason_labels.get(outcome.reason, '尚无核验记录') if outcome else '尚无核验记录' }}{% if outcome %} · 最近核验：{{ outcome.checked_at|shanghai_time }}{% endif %}</p>
+{% if referral.rewarded_at %}<p>到账时间：{{ referral.rewarded_at|shanghai_time }} · 邀请人 +{{ referral.inviter_days }} 天 · 好友 +{{ referral.friend_days }} 天</p>{% endif %}
+<details class="referral-rules"><summary>查看到账凭据与额度</summary>
+{% for side,label in [('inviter','邀请人'),('friend','好友')] %}
+{% set receipt=receipts.get(referral.friend_id, {}).get(side) %}
+{% if receipt %}<p>{{ label }}到账凭据：{% if receipt.unlimited %}原额度无限期，保留无限期（奖励 {{ receipt.days }} 天已记账）{% else %}到期时间 {{ receipt.expires_before|shanghai_time }} → <strong>{{ receipt.expires_after|shanghai_time }}</strong>{% endif %}</p>{% endif %}
+{% endfor %}
+<p class="muted">{% if inviter_name %}<a href="/admin/users/{{ referral.inviter_id }}/quota">查看邀请人当前额度</a>{% endif %}{% if friend_name %} · <a href="/admin/users/{{ referral.friend_id }}/quota">查看好友当前额度</a>{% endif %}</p>
+</details></div></article>
+{% else %}<p class="muted">没有符合条件的记录。</p>{% endfor %}
+<nav class="admin-pager" aria-label="邀请记录分页">{% if page_number>1 %}<a href="?page={{ page_number-1 }}&q={{ q|urlencode }}&status={{ status|urlencode }}&period={{ period|urlencode }}">上一页</a>{% endif %}<span>第 {{ page_number }} / {{ pages }} 页 · 共 {{ total }} 条</span>{% if page_number<pages %}<a href="?page={{ page_number+1 }}&q={{ q|urlencode }}&status={{ status|urlencode }}&period={{ period|urlencode }}">下一页</a>{% endif %}</nav>
+
+</section>
+</div>
+{% endblock %}

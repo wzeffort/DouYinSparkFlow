@@ -3,7 +3,7 @@ from __future__ import annotations
 import secrets
 import string
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from spark_console.models import DouyinAccount, SparkTask, TaskRun, User, WebSession
@@ -22,12 +22,8 @@ def validate_registration_username(username: str) -> str:
 
 
 def validate_registration_password(password: str) -> None:
-    if len(password) < 12:
-        raise ValidationError("密码至少需要 12 位")
-    if not any(character.isalpha() for character in password):
-        raise ValidationError("密码必须包含至少一个字母")
-    if not any(character.isdigit() for character in password):
-        raise ValidationError("密码必须包含至少一个数字")
+    if len(password) < 9:
+        raise ValidationError("密码至少需要 9 位")
 
 
 class UserService:
@@ -102,10 +98,13 @@ class UserService:
         return user
 
     def delete(self, actor_id: str, user_id: str, confirmation: str) -> None:
+        # Serialize dependency checks with order creation before any deletion.
+        self.session.execute(update(User).where(User.id == user_id).values(status=User.status))
         self._require_admin(actor_id)
         user = self.session.get(User, user_id)
         if user is None:
             raise NotFound("user not found")
+        self.session.refresh(user)
         if user.id == actor_id:
             raise ValidationError("不能删除当前管理员账号")
         if user.role == 'admin':
@@ -118,6 +117,10 @@ class UserService:
         ).limit(1))
         if running is not None:
             raise ValidationError("该用户有正在执行的任务，请等待执行结束后再删除")
+        from spark_console.renewal_models import RenewalOrder
+        if self.session.scalar(select(RenewalOrder.id).where(
+                RenewalOrder.user_id == user.id).limit(1)):
+            raise ValidationError('该用户有续卡订单，请停用账号以保留付款和优惠记录，不能直接删除。')
         self.session.query(SparkTask).filter(SparkTask.owner_user_id == user.id).delete()
         self.session.query(DouyinAccount).filter(DouyinAccount.owner_user_id == user.id).delete()
         self.session.query(WebSession).filter(WebSession.user_id == user.id).delete()
