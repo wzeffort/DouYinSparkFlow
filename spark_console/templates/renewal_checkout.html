@@ -11,7 +11,7 @@
       {% if code_ready %}
         <div class="renewal-qr-frame"><img src="/renewal/codes/{{ order.channel }}" alt="{{ channel_label }}收款码"></div>
         <p class="renewal-qr-hint">请用{{ channel_label }}扫码，手动输入 <strong>¥{{ amount }}</strong></p>
-        <a class="renewal-qr-large" href="/renewal/codes/{{ order.channel }}" target="_blank" rel="noopener">打开收款码大图 ↗</a>
+        <button type="button" class="renewal-qr-large" data-qr-zoom="/renewal/codes/{{ order.channel }}" data-qr-amount="¥{{ amount }}" data-qr-channel="{{ channel_label }}">🔍 查看收款码大图</button>
       {% else %}
         <div class="renewal-code-placeholder"><strong>{{ channel_label }}收款码</strong><span>收款码尚未配置</span></div>
         <p class="renewal-qr-hint">请先添加 QQ <strong>718868371</strong> 获取收款码，按订单金额付款。</p>

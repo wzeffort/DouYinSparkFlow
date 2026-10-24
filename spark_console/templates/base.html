@@ -10,7 +10,7 @@
   <meta property="og:type" content="website">
   <link rel="stylesheet" href="/static/app.css?v=20261024-ui2">
   {% if landing %}<link rel="stylesheet" href="/static/landing.css?v=20261024-1">{% endif %}
-  <link rel="stylesheet" href="/static/renewal.css?v=20261024-2">
+  <link rel="stylesheet" href="/static/renewal.css?v=20261024-3">
   <link rel="stylesheet" href="/static/atmosphere.css?v=20261011-1">
   <link rel="stylesheet" href="/static/profile.css?v=20261011-1">
   {% if push_enabled %}<link rel="stylesheet" href="/static/push_settings.css?v=20261009">{% endif %}
@@ -100,7 +100,7 @@
 <main class="{% if nav is defined and not nav %}auth-main{% endif %}">
   {% block content %}{% endblock %}
 </main>
-<script defer src="/static/security-ui.js?v=20261024-login1"></script>
+<script defer src="/static/security-ui.js?v=20261024-2"></script>
 {% if demo_mode %}<script defer src="/static/demo_gate.js?v=20261024-1"></script>{% endif %}
 {% if nav is not defined or nav %}<script defer src="/static/navigation.js?v=20260902-1"></script>{% endif %}
 </body></html>
