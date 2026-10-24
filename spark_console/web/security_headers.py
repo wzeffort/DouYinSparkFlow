@@ -32,8 +32,15 @@ class SecurityBoundaryMiddleware:
                     "style-src 'self' 'unsafe-inline'; font-src 'self'; "
                     f"script-src 'self' 'nonce-{nonce}'"
                 )
-                if not scope['path'].startswith('/static/'):
-                    headers['Cache-Control'] = 'private, no-store' if scope['path'] == '/profile/avatar' else 'no-store'
+                if scope['path'].startswith('/static/'):
+                    # Every template reference to /static/ carries a ?v= cache
+                    # buster, so a year-long immutable lifetime never serves a
+                    # stale asset across releases.
+                    headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+                elif scope['path'] == '/profile/avatar':
+                    headers['Cache-Control'] = 'private, no-store'
+                else:
+                    headers['Cache-Control'] = 'no-store'
                 if self.secure:
                     headers['Strict-Transport-Security'] = 'max-age=31536000'
             await send(message)

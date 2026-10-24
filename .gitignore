@@ -21,3 +21,7 @@ artifacts/
 .pytest_cache/
 *.tar.gz
 *.bak-*
+*.bak-*
+deploy/shared-db/runtime/
+deploy/shared-db/compose.database.staging.yml
+releases/

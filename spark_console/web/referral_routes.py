@@ -38,14 +38,13 @@ def build_referral_router(engine, auth, pii, cipher, page, public_base_url):
             .outerjoin(User, User.id == Referral.friend_id).where(Referral.inviter_id == user.id)
             .order_by(Referral.created_at.desc(), Referral.friend_id)
             .offset((history_page - 1) * 25).limit(25)).all()
-        count, days = db.execute(select(func.count(), func.coalesce(func.sum(Referral.inviter_days), 0))
-            .select_from(Referral).where(Referral.inviter_id == user.id,
-                                        Referral.rewarded_at.is_not(None))).one()
+        count = db.scalar(select(func.count()).select_from(Referral).where(
+            Referral.inviter_id == user.id, Referral.rewarded_at.is_not(None)))
         incoming = db.get(Referral, user.id)
         return page(request, "referrals.html", 400 if error else 200, title="邀请好友",
-                    invitations=invitations, history=history, count=count, days=days,
+                    invitations=invitations, history=history, count=count,
                     registered=registered, history_page=history_page, history_pages=history_pages,
-                    qq_verified=bool(ReferralService(db, pii).qq_hash(user)), incoming=incoming,
+                    referral_email_verified=bool(ReferralService(db, pii).verified_email_hash(user)), incoming=incoming,
                     douyin_state=ReferralService(db, pii).douyin_state(user.id),
                     generated_count=ReferralService(db, pii).generated_count(user.id),
                     next_reward=ReferralService.reward_tier(count),

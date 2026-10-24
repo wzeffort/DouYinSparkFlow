@@ -293,3 +293,65 @@
 .recipient-review-panel dd { margin-inline-start: 0; overflow-wrap: anywhere; }
 .recipient-confirm { display: flex; align-items: flex-start; gap: .6rem; }
 .recipient-confirm input[type="checkbox"] { width: auto; flex: 0 0 auto; margin-top: .25rem; }
+
+/* Auth form affordances: password reveal, caps-lock notice, submit busy state. */
+.password-field{position:relative;display:block}.password-field input{padding-right:66px}
+.password-toggle{position:absolute;right:6px;top:50%;min-height:34px;padding:6px 13px;border:1px solid #d7dbe5;border-radius:8px;background:#fff;color:var(--muted);font-size:12px;font-weight:700;transform:translateY(-50%)}
+.password-toggle:hover{background:#f4f5f8;color:var(--ink)}
+.capslock-hint{margin-top:6px;color:#76520e;font-size:12px;font-weight:700}
+button:disabled,button[aria-busy="true"]{opacity:.65;cursor:progress;transform:none}
+button:disabled:hover,button[aria-busy="true"]:hover{background:var(--ember);transform:none;cursor:progress}
+.password-toggle:disabled{opacity:1;cursor:default}
+@media (prefers-reduced-motion:reduce){*,*::before,*::after{transition-duration:.01ms!important;animation-duration:.01ms!important;animation-iteration-count:1!important}.button:hover,button:hover{transform:none}}
+
+/* Anonymous console preview banner. */
+.demo-banner{position:fixed;z-index:50;left:50%;bottom:18px;transform:translateX(-50%);display:flex;align-items:center;gap:18px;max-width:calc(100vw - 24px);padding:10px 18px;border:1px solid #efb7ae;border-radius:999px;background:rgba(255,255,255,.96);box-shadow:0 16px 40px rgba(31,38,61,.18);font-size:13px;font-weight:700;white-space:nowrap}
+.demo-banner-actions{display:flex;gap:14px}
+.demo-banner-actions a:first-child{color:var(--ember-dark);text-decoration:underline;text-underline-offset:3px}
+.demo-banner-actions a:last-child{color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+body.demo-on main{padding-bottom:96px}
+
+/* Demo signup gate modal. */
+.demo-gate{position:fixed;inset:0;z-index:60;display:grid;place-items:center;padding:20px;background:rgba(24,32,51,.45)}
+.demo-gate-card{width:min(420px,100%);padding:34px 28px;border-radius:22px;background:#fff;box-shadow:0 30px 80px rgba(20,27,44,.35);text-align:center;animation:demo-gate-in .2s ease-out}
+.demo-gate-mark{display:grid;place-items:center;width:52px;height:52px;margin:0 auto 16px;border-radius:16px;background:var(--ember);color:#fff;font-size:24px;font-weight:800}
+.demo-gate-card h2{margin:0 0 10px;font-size:24px;color:var(--ink)}
+.demo-gate-card p{margin:0;color:var(--muted);font-size:14px;line-height:1.8}
+.demo-gate-actions{display:grid;gap:10px;margin-top:22px}
+.demo-gate-primary{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;background:var(--ember);color:#fff;padding:13px 20px;font-weight:750;text-decoration:none;transition:.18s ease}
+.demo-gate-primary:hover{background:var(--ember-dark)}
+.demo-gate-quiet{border:1px solid #d7dbe5;background:#fff;color:var(--muted);border-radius:12px;padding:12px 20px;font:inherit;font-weight:700;cursor:pointer}
+.demo-gate-quiet:hover{background:#f4f5f8}
+.demo-gate-login{display:inline-block;margin-top:16px;color:var(--muted);font-size:13px;text-decoration:underline;text-underline-offset:3px}
+.demo-gate-login:hover{color:var(--ink)}
+body.demo-gate-open{overflow:hidden}
+@keyframes demo-gate-in{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:none}}
+@media (prefers-reduced-motion:reduce){.demo-gate-card{animation:none}}
+@media(max-width:640px){.demo-banner{bottom:12px;gap:10px;font-size:12px;padding:9px 14px}.demo-banner>span:first-child{display:none}.demo-banner-actions{gap:12px}}
+
+/* Douyin scan dialog redesign: QR + progress side panel. */
+.scan-dialog{width:min(920px,calc(100vw - 28px))}
+.scan-dialog-card{padding:30px 30px 24px;text-align:left}
+.scan-dialog-head h2{margin:0 40px 18px 0;font-size:23px}
+.scan-body{display:grid;grid-template-columns:minmax(0,1.35fr) minmax(270px,.65fr);gap:24px;align-items:start}
+.scan-frame{width:100%;height:auto;aspect-ratio:16/10;border-radius:16px;border:1px solid var(--mist);background:#fafbfe}
+.scan-qr{width:100%;height:100%;object-fit:contain;cursor:crosshair}
+.scan-qr-crop{width:100%;height:100%;object-fit:contain}
+.scan-spinner{display:inline-block;width:42px;height:42px;border:3px solid #f5c3bb;border-top-color:var(--ember);border-radius:50%;animation:scan-spin .9s linear infinite}
+.scan-side{display:grid;gap:14px;align-content:start}
+.scan-progress{display:grid;gap:11px;list-style:none;margin:2px 0 0;padding:0}
+.scan-progress li{display:flex;align-items:center;gap:11px;color:var(--muted);font-size:14px;transition:.18s ease}
+.scan-progress i{display:grid;place-items:center;width:28px;height:28px;border:1px solid #e3e6ef;border-radius:50%;font:700 12px Georgia,serif;font-style:normal;background:#fff;flex:0 0 auto}
+.scan-dialog[data-status="queued"] li[data-step="queued"],.scan-dialog[data-status="loading_qr"] li[data-step="loading_qr"],.scan-dialog[data-status="awaiting_scan"] li[data-step="awaiting_scan"],.scan-dialog[data-status="confirming"] li[data-step="confirming"]{color:var(--ink);font-weight:750}
+.scan-dialog[data-status="queued"] li[data-step="queued"] i,.scan-dialog[data-status="loading_qr"] li[data-step="loading_qr"] i,.scan-dialog[data-status="awaiting_scan"] li[data-step="awaiting_scan"] i,.scan-dialog[data-status="confirming"] li[data-step="confirming"] i{border-color:var(--ember);background:var(--ember);color:#fff;box-shadow:0 6px 16px rgba(243,101,82,.28)}
+.scan-dialog[data-status="loading_qr"] li[data-step="queued"] i,.scan-dialog[data-status="awaiting_scan"] li[data-step="queued"] i,.scan-dialog[data-status="awaiting_scan"] li[data-step="loading_qr"] i,.scan-dialog[data-status="confirming"] li[data-step="queued"] i,.scan-dialog[data-status="confirming"] li[data-step="loading_qr"] i,.scan-dialog[data-status="confirming"] li[data-step="awaiting_scan"] i,.scan-dialog[data-status="succeeded"] .scan-progress li i{border-color:#bfe4d6;background:#e5f5ef;color:var(--jade)}
+.scan-dialog[data-status="succeeded"] .scan-progress li{color:var(--ink)}
+.scan-status{max-width:none;min-height:24px;margin:0}
+.scan-sms-hint{margin:0;color:var(--muted);font-size:12px;line-height:1.7}
+.scan-input-row{display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:2px}
+.scan-input-row input{min-height:42px}
+.scan-input-row button{min-height:42px;white-space:nowrap}
+@media(max-width:820px){.scan-body{grid-template-columns:1fr}.scan-frame{aspect-ratio:4/3}.scan-dialog-card{padding:24px 18px 18px}}
+
+/* Hide the browser-native password reveal where our own toggle exists. */
+.password-field input::-ms-reveal,.password-field input::-ms-clear{display:none}

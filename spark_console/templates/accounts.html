@@ -56,13 +56,33 @@
     <dialog id="scan-dialog" class="scan-dialog" aria-labelledby="scan-dialog-title">
       <div class="scan-dialog-card">
         <button id="scan-close" class="scan-close quiet" type="button" aria-label="关闭扫码窗口">×</button>
-        <span class="eyebrow">SECURE BINDING</span>
-        <h2 id="scan-dialog-title">云端抖音登录</h2>
+        <div class="scan-dialog-head">
+          <span class="eyebrow">SECURE BINDING</span>
+          <h2 id="scan-dialog-title">扫码绑定抖音账号</h2>
+        </div>
         <div id="scan-stage" class="scan-stage" aria-busy="true">
-          <div class="scan-frame">
-            <img id="scan-qr" class="scan-qr" alt="云端抖音登录页面" hidden>
-            <img id="scan-qr-crop" class="scan-qr-crop" alt="抖音登录二维码" hidden>
-            <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span></span><small>正在启动云端登录页</small></div>
+          <div class="scan-body">
+            <div class="scan-frame">
+              <img id="scan-qr" class="scan-qr" alt="云端抖音登录页面" hidden>
+              <img id="scan-qr-crop" class="scan-qr-crop" alt="抖音登录二维码" hidden>
+              <div id="scan-placeholder" class="scan-placeholder" aria-hidden="true"><span class="scan-spinner" aria-hidden="true"></span><small>正在启动云端浏览器…</small></div>
+            </div>
+            <div class="scan-side">
+              <ol class="scan-progress">
+                <li data-step="queued"><i>1</i><span>创建绑定会话</span></li>
+                <li data-step="loading_qr"><i>2</i><span>打开抖音登录页</span></li>
+                <li data-step="awaiting_scan"><i>3</i><span>用抖音 App 扫码</span></li>
+                <li data-step="confirming"><i>4</i><span>在手机上确认登录</span></li>
+              </ol>
+              <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
+              <p id="scan-countdown" class="scan-countdown"></p>
+              <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
+              <div class="scan-input-row">
+                <label class="sr-only" for="scan-text">短信验证码</label>
+                <input id="scan-text" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{4,8}" placeholder="输入 4–8 位短信验证码">
+                <button id="scan-type" type="button">输入到云端</button>
+              </div>
+            </div>
           </div>
           <div id="scan-mobile-actions" class="scan-mobile-actions" hidden>
             <p>同一部手机操作：保存二维码后，打开抖音“扫一扫”，从相册选择二维码。也可以使用另一台设备直接扫描。</p>
@@ -71,14 +91,6 @@
             </div>
             <small>iPhone 若未直接下载，可长按上方二维码保存到相册。</small>
           </div>
-          <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
-          <div class="scan-input-row">
-            <label class="sr-only" for="scan-text">短信验证码</label>
-            <input id="scan-text" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="8" pattern="[0-9]{4,8}" placeholder="输入 4–8 位短信验证码">
-            <button id="scan-type" type="button">输入到云端</button>
-          </div>
-          <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
-          <p id="scan-countdown" class="scan-countdown"></p>
         </div>
         <div class="scan-dialog-actions">
           <button id="scan-cancel" class="quiet" type="button">取消绑定</button>
@@ -87,5 +99,5 @@
     </dialog>
   </section>
 </div>
-<script defer src="/static/account_scan.js?v=20260902-2"></script>
+<script defer src="/static/account_scan.js?v=20261024-1"></script>
 {% endblock %}

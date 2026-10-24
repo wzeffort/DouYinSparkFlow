@@ -1,0 +1,41 @@
+/* Public landing page (anonymous visitors only). */
+.landing{max-width:1080px;margin:0 auto;padding:0 24px 64px}
+.landing-top{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:26px 0 10px}
+.landing-top .brand{color:var(--ink)}
+.landing-top .brand small{margin-left:2px}
+.landing-top-actions{display:flex;align-items:center;gap:18px}
+.landing-login{font-weight:700;color:var(--muted)}
+.landing-login:hover{color:var(--ink)}
+.landing-cta{display:inline-flex;align-items:center;justify-content:center;border-radius:12px;background:var(--ember);color:#fff;padding:10px 20px;font-weight:750;transition:.18s ease;box-shadow:0 10px 26px rgba(243,101,82,.28)}
+.landing-cta:hover{background:var(--ember-dark);transform:translateY(-1px)}
+.landing-hero{padding:clamp(44px,9vw,96px) 0 40px;max-width:720px}
+.landing-hero h1{font-family:Georgia,"Songti SC",serif;font-size:clamp(34px,6vw,58px);line-height:1.16;margin:14px 0 0;color:var(--ink)}
+.landing-lead{margin:22px 0 0;font-size:clamp(15px,2.2vw,18px);color:var(--muted);line-height:1.8}
+.landing-actions{display:flex;flex-wrap:wrap;gap:14px;margin-top:34px}
+.landing-actions .big{padding:14px 26px;font-size:15px}
+.landing-actions .landing-login.big{border:1px solid #d7dbe5;border-radius:12px;color:var(--ink)}
+.landing-actions .landing-login.big:hover{background:#fff}
+.landing-trust{display:flex;flex-wrap:wrap;gap:10px 26px;list-style:none;margin:30px 0 0;padding:0}
+.landing-trust li{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;font-weight:600}
+.landing-trust span{display:grid;place-items:center;width:18px;height:18px;border-radius:50%;background:#e5f5ef;color:var(--jade);font-size:11px;font-weight:800}
+.landing-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:18px;padding:28px 0 8px}
+.landing-grid article{background:var(--paper);border:1px solid rgba(222,225,234,.9);border-radius:20px;padding:26px;box-shadow:0 4px 20px rgba(31,38,61,.035);transition:.18s ease}
+.landing-grid article:hover{transform:translateY(-2px);box-shadow:0 14px 34px rgba(31,38,61,.08)}
+.landing-grid h2{margin:14px 0 8px;font-size:18px;color:var(--ink)}
+.landing-grid p{margin:0;color:var(--muted);font-size:14px;line-height:1.75}
+.landing-icon{display:grid;place-items:center;width:44px;height:44px;border-radius:14px;background:#fff0ed;color:var(--ember);font-size:19px}
+.landing-steps{background:var(--paper);border:1px solid rgba(222,225,234,.9);border-radius:24px;padding:clamp(28px,5vw,48px);margin-top:26px;box-shadow:var(--shadow)}
+.landing-steps h2{font-family:Georgia,"Songti SC",serif;font-size:clamp(22px,3.4vw,30px);margin:0 0 26px;color:var(--ink)}
+.landing-steps ol{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:22px;list-style:none;counter-reset:step;margin:0 0 30px;padding:0}
+.landing-steps li{counter-increment:step;position:relative;padding-top:38px}
+.landing-steps li::before{content:counter(step,decimal-leading-zero);position:absolute;top:0;left:0;font:800 15px Georgia,serif;color:var(--ember);letter-spacing:.06em}
+.landing-steps li::after{content:"";position:absolute;top:12px;left:34px;right:0;border-top:1px dashed #e3c4bc}
+.landing-steps strong{display:block;font-size:16px;color:var(--ink)}
+.landing-steps span{display:block;margin-top:6px;color:var(--muted);font-size:13px;line-height:1.7}
+.landing-note{margin-top:26px}
+.landing-note p{display:inline-flex;align-items:center;gap:8px;margin:0;padding:12px 18px;border-radius:12px;background:#f2f4f8;color:#687286;font-size:13px}
+.landing-foot{display:flex;align-items:center;gap:20px;margin-top:44px;padding-top:22px;border-top:1px solid var(--mist);color:var(--muted);font-size:13px}
+.landing-foot a{color:var(--muted);text-decoration:underline;text-underline-offset:3px}
+.landing-foot a:hover{color:var(--ink)}
+@media(max-width:640px){.landing{padding:0 16px 48px}.landing-top .brand small{display:none}.landing-actions .big{flex:1 1 auto}}
+@media (prefers-reduced-motion:reduce){.landing-grid article,.landing-cta{transition:none}.landing-grid article:hover,.landing-cta:hover{transform:none}}

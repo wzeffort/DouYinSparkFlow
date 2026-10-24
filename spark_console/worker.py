@@ -107,10 +107,17 @@ class Worker:
             lock.lease_until = current_time + timedelta(
                 seconds=max(30, self.settings.worker_poll_seconds * 3)
             )
-            TaskCapacityService(db, AuditService(db)).reconcile_all(current_time)
+            # Reconcile every task of due owners, including quota migration, but
+            # keep unrelated users out of the serialized scheduling transaction.
+            TaskCapacityService(db, AuditService(db)).reconcile_all(current_time, due_only=True)
             run = claim_next_due_task(db, current_time, self.worker_id)
             if run is None:
                 return None
+            # Claim only within the reconciled horizon; use fresh time for the
+            # lease/window after admission so another owner cannot bypass quotas.
+            if now is None:
+                current_time = datetime.now(timezone.utc)
+                run.started_at = current_time
             lock.lease_until = current_time + timedelta(
                 seconds=max(
                     30,

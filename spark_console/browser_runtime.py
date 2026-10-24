@@ -242,10 +242,34 @@ def has_pending(db, role, now):
         SparkTask.next_run_at <= now).limit(1)) is not None
 
 
+def refresh_worker_lease(engine, worker_id, now=None):
+    """Health writes must never wait behind the job they supervise.
+
+    The browser slot remains authoritative for execution ownership. A busy
+    application transaction can defer this projection without killing its job;
+    connection failures still propagate so a disconnected supervisor fails closed.
+    """
+    from sqlalchemy import text
+    from sqlalchemy.orm import Session
+    from spark_console.cluster import TRANSACTION_LOCK
+    from spark_console.models import WorkerLock
+    with Session(engine) as db:
+        if engine.dialect.name == 'postgresql' and not db.scalar(text(
+                'SELECT pg_try_advisory_xact_lock(:key)'), {'key': TRANSACTION_LOCK}):
+            return False
+        row = db.get(WorkerLock, 1)
+        if row is None:
+            row = WorkerLock(id=1)
+            db.add(row)
+        row.worker_id = worker_id
+        row.lease_until = (now or datetime.now(timezone.utc)) + timedelta(seconds=40)
+        db.commit()
+    return True
+
+
 def run_supervisor(role):
     from spark_console.config import Settings
     from spark_console.db import create_engine_for, create_schema, session_scope
-    from spark_console.models import WorkerLock
     if role not in {'worker', 'auth'} or sys.platform != 'linux':
         raise RuntimeError('unsupported supervisor deployment')
     settings = Settings.from_env(os.environ)
@@ -274,13 +298,7 @@ def run_supervisor(role):
     def heartbeat():
         slot.check()
         if role == 'worker':
-            with session_scope(engine) as db:
-                row = db.get(WorkerLock, 1)
-                if row is None:
-                    row = WorkerLock(id=1)
-                    db.add(row)
-                row.worker_id = f'supervisor-{os.getpid()}'
-                row.lease_until = datetime.now(timezone.utc) + timedelta(seconds=40)
+            refresh_worker_lease(engine, f'supervisor-{os.getpid()}')
     def status(state):
         nonlocal last_state
         payload = {'role': role, 'state': state, 'updated_at': datetime.now(timezone.utc).isoformat()}
@@ -318,7 +336,9 @@ def run_supervisor(role):
             except Exception:
                 # No exception strings: dependency errors may contain credentials.
                 status('runtime_error')
-            end = time.monotonic() + (5 if role == 'worker' else 2)
+            # Auth reacts to a new binding request within 0.5s so users do not
+            # wait a full poll cycle before the cloud browser even starts.
+            end = time.monotonic() + (5 if role == 'worker' else 0.5)
             while not stopping and time.monotonic() < end:
                 time.sleep(0.2)
     finally:
