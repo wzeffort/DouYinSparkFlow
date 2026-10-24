@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Callable
@@ -121,7 +122,9 @@ class DouyinQrScanner:
         qr_timeout_seconds: float = 45,
         login_timeout_seconds: float = 300,
         poll_interval_seconds: float = 0.2,
+        offload_callbacks: bool = False,
     ):
+        self.offload_callbacks = offload_callbacks
         self.playwright_factory = playwright_factory or _default_playwright_factory
         self.qr_timeout_seconds = qr_timeout_seconds
         self.login_timeout_seconds = login_timeout_seconds
@@ -130,6 +133,23 @@ class DouyinQrScanner:
         self._browser = None
         self._prepared: _PreparedScan | None = None
 
+    async def _callback(self, callback, *args):
+        # Production callbacks own their DB sessions. Keep network I/O off the
+        # Playwright event loop so screenshots and navigation can keep running.
+        if self.offload_callbacks and not inspect.iscoroutinefunction(callback):
+            result = await asyncio.to_thread(callback, *args)
+        else:
+            result = callback(*args)
+        return await result if inspect.isawaitable(result) else result
+
+    async def _publish_qr(self, callback, full_png, crop_png):
+        try:
+            inspect.signature(callback).bind(full_png, crop_png)
+        except (TypeError, ValueError):
+            await self._callback(callback, full_png)
+            return
+        await self._callback(callback, full_png, crop_png)
+
     @property
     def has_prepared(self) -> bool:
         return self._prepared is not None
@@ -137,6 +157,9 @@ class DouyinQrScanner:
     async def start(self) -> None:
         if self._browser is not None:
             return
+        # Login screenshots must not depend on third-party web fonts finishing.
+        # The driver reads this switch when it starts, before any page is opened.
+        os.environ["PW_TEST_SCREENSHOT_NO_FONTS_READY"] = "1"
         manager = self.playwright_factory()
         try:
             playwright = await manager.__aenter__()
@@ -235,9 +258,9 @@ class DouyinQrScanner:
             raise QrLoadFailed()
         deadline = self._deadline(expires_at)
         try:
-            self._checkpoint(cancelled, deadline)
+            await self._checkpoint(cancelled, deadline)
             await self._await_stage(
-                _invoke_qr(on_qr, prepared.full_png, prepared.crop_png),
+                self._publish_qr(on_qr, prepared.full_png, prepared.crop_png),
                 cancelled,
                 deadline,
             )
@@ -247,7 +270,7 @@ class DouyinQrScanner:
                     inspect.signature(on_qr).bind(png)
                 except (TypeError, ValueError):
                     return
-                await _invoke(on_qr, png)
+                await self._callback(on_qr, png)
 
             await self._await_stage(
                 self._wait_for_login(
@@ -348,7 +371,7 @@ class DouyinQrScanner:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.qr_timeout_seconds
         while loop.time() < deadline:
-            if cancelled():
+            if await self._callback(cancelled):
                 raise ScanCancelled()
             for label in ("登录", "扫码登录"):
                 for button in await page.get_by_text(label, exact=True).all():
@@ -363,7 +386,7 @@ class DouyinQrScanner:
         loop = asyncio.get_running_loop()
         deadline = loop.time() + self.qr_timeout_seconds
         while loop.time() < deadline:
-            if cancelled():
+            if await self._callback(cancelled):
                 raise ScanCancelled()
             try:
                 for panel_selector in LOGIN_PANEL_SELECTORS:
@@ -418,7 +441,7 @@ class DouyinQrScanner:
                 return
             confirmed = True
             confirmed_event.set()
-            await _invoke(on_confirming, True)
+            await self._callback(on_confirming, True)
 
         authenticated = asyncio.create_task(
             page.wait_for_selector(
@@ -588,9 +611,7 @@ class DouyinQrScanner:
             if not sms_selected:
                 sms_selected = await self._select_sms_verification(page)
             if next_interaction is not None:
-                action = next_interaction()
-                if inspect.isawaitable(action):
-                    action = await action
+                action = await self._callback(next_interaction)
                 if isinstance(action, dict) and action.get("kind") == "click":
                     x = float(action.get("x", -1))
                     y = float(action.get("y", -1))
@@ -603,9 +624,17 @@ class DouyinQrScanner:
                     value = str(action.get("text", ""))
                     if value.isdigit() and 4 <= len(value) <= 8:
                         await self._type_and_submit_verification_code(page, value)
-            png = await page.screenshot(type="png")
+            try:
+                png = await page.screenshot(type="png", timeout=5_000)
+            except Exception as error:
+                from playwright.async_api import TimeoutError as ScreenshotTimeout
+                if not isinstance(error, ScreenshotTimeout):
+                    raise
+                logger.warning("auth view screenshot timed out; retaining previous frame")
+                await asyncio.sleep(max(0.75, self.poll_interval_seconds))
+                continue
             if isinstance(png, bytes) and png.startswith(PNG_SIGNATURE):
-                await _invoke(on_view, png)
+                await self._callback(on_view, png)
             await asyncio.sleep(max(0.75, self.poll_interval_seconds))
 
     @staticmethod
@@ -657,7 +686,7 @@ class DouyinQrScanner:
             body = await response.json()
             data = body.get("data") if isinstance(body, dict) else None
             if not (isinstance(data, dict) and body.get("message") == "success"
-                    and data.get("error_code") == 0 and data.get("user_id")):
+                    and data.get("error_code") in (0, None) and data.get("user_id")):
                 return None, None
             def clean(value):
                 if not isinstance(value, str):
@@ -680,7 +709,7 @@ class DouyinQrScanner:
         return bool(
             isinstance(data, dict)
             and body.get("message") == "success"
-            and data.get("error_code") == 0
+            and data.get("error_code") in (0, None)
             and data.get("user_id")
         )
 
@@ -730,7 +759,7 @@ class DouyinQrScanner:
 
     async def _wait_until_cancelled(self, cancelled) -> None:
         while True:
-            if cancelled():
+            if await self._callback(cancelled):
                 return
             await asyncio.sleep(self.poll_interval_seconds)
 
@@ -746,16 +775,15 @@ class DouyinQrScanner:
             remaining = (value - datetime.now(timezone.utc)).total_seconds()
         return asyncio.get_running_loop().time() + max(0, remaining)
 
-    @staticmethod
-    def _checkpoint(cancelled, deadline: float) -> None:
-        if cancelled():
+    async def _checkpoint(self, cancelled, deadline: float) -> None:
+        if await self._callback(cancelled):
             raise ScanCancelled()
         if asyncio.get_running_loop().time() >= deadline:
             raise LoginTimedOut()
 
     async def _await_stage(self, awaitable, cancelled, deadline: float):
         try:
-            self._checkpoint(cancelled, deadline)
+            await self._checkpoint(cancelled, deadline)
         except BaseException:
             if inspect.iscoroutine(awaitable):
                 awaitable.close()

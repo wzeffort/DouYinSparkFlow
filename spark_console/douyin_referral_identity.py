@@ -20,7 +20,7 @@ async def read_verified_user_id(context):
             return None
         body = await response.json()
         data = body.get("data") if isinstance(body, dict) else None
-        if isinstance(data, dict) and body.get("message") == "success" and data.get("error_code") == 0:
+        if isinstance(data, dict) and body.get("message") == "success" and data.get("error_code") in (0, None):
             return canonical_user_id(data.get("user_id"))
     except Exception:
         pass
