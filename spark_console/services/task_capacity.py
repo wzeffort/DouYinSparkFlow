@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from math import ceil
@@ -98,9 +99,7 @@ class TaskCapacityService:
             return
         now = self._aware(at or datetime.now(timezone.utc))
         existing = self.session.get(TaskQuotaBinding, task.id)
-        if existing:
-            if not self.task_authorized(task, now):
-                raise ValidationError("此任务绑定的名额已到期或失效，请续期后再启用")
+        if existing and self.task_authorized(task, now):
             return
         grants = [g for g in self.grants_for(owner.id) if self._grant_active(g, now)]
         grants.sort(key=lambda g: (self._aware(g.expires_at) if g.expires_at else datetime.max.replace(tzinfo=timezone.utc), g.id))
@@ -111,12 +110,17 @@ class TaskCapacityService:
                 old_task = self.session.get(SparkTask, bound.task_id)
                 if old_task and old_task.enabled:
                     occupied.add(bound.position)
-                else:
+                elif bound.task_id != task.id:
                     self.session.delete(bound)
             self.session.flush()
             for position in range(grant.amount):
                 if position not in occupied:
-                    self.session.add(TaskQuotaBinding(task_id=task.id, grant_id=grant.id, position=position))
+                    if existing is None:
+                        self.session.add(TaskQuotaBinding(task_id=task.id, grant_id=grant.id, position=position))
+                    else:
+                        # Preserve the old binding until a free, active slot is found.
+                        existing.grant_id = grant.id
+                        existing.position = position
                     self.session.flush()
                     return
         raise ValidationError("没有可用任务名额，请联系管理员开通或续期")
@@ -426,7 +430,8 @@ class TaskCapacityService:
         user = self.session.get(User, user_id)
         if user is None:
             raise NotFound("user not found")
-        limit = self.limit_for(user, at)
+        current = self._aware(at or datetime.now(timezone.utc))
+        limit = self.limit_for(user, current)
         if limit is None:
             return []
         enabled = list(
@@ -439,7 +444,32 @@ class TaskCapacityService:
                 .order_by(SparkTask.created_at, SparkTask.id)
             ).all()
         )
-        expired = [task for task in enabled if not self.task_authorized(task, at)]
+        authorized_count = sum(self.task_authorized(task, current) for task in enabled)
+        for task in enabled:
+            if user.status != "active" or authorized_count >= limit:
+                break
+            binding = self.session.get(TaskQuotaBinding, task.id)
+            old_grant = self.session.get(TaskQuotaGrant, binding.grant_id) if binding else None
+            if (old_grant is None or old_grant.user_id != user_id
+                    or old_grant.revoked_at is not None or old_grant.expires_at is None
+                    or self._aware(old_grant.expires_at) > current):
+                continue
+            old_grant_id = old_grant.id
+            try:
+                self.bind_task(task, current)
+            except ValidationError:
+                continue
+            new_grant = self.session.get(TaskQuotaGrant, binding.grant_id)
+            self.audit.write(
+                None, "task.quota_auto_migrated", "spark_task", task.id,
+                detail=json.dumps({
+                    "old_grant_id": old_grant_id,
+                    "new_grant_id": new_grant.id,
+                    "expires_at": self._aware(new_grant.expires_at).isoformat() if new_grant.expires_at else None,
+                }, separators=(",", ":")),
+            )
+            authorized_count += 1
+        expired = [task for task in enabled if not self.task_authorized(task, current)]
         available = [task for task in enabled if task not in expired]
         excess = expired + available[limit:]
         for task in excess:
@@ -455,16 +485,19 @@ class TaskCapacityService:
         self.session.flush()
         return [task.id for task in excess]
 
-    def reconcile_all(self, at: datetime | None = None) -> list[str]:
-        user_ids = self.session.scalars(
-            select(SparkTask.owner_user_id)
+    def reconcile_all(self, at: datetime | None = None, *, due_only: bool = False) -> list[str]:
+        query = select(SparkTask.owner_user_id)
+        query = (query
             .join(User, User.id == SparkTask.owner_user_id)
             .where(
                 SparkTask.enabled.is_(True),
                 User.role != "admin",
             )
-            .distinct()
-        ).all()
+            .distinct())
+        if due_only:
+            query = query.where(SparkTask.douyin_account_id.is_not(None),
+                SparkTask.next_run_at <= self._aware(at or datetime.now(timezone.utc)))
+        user_ids = self.session.scalars(query).all()
         paused = []
         for user_id in user_ids:
             paused.extend(self.reconcile_user(user_id, at))

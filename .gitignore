@@ -6,6 +6,8 @@ logs/
 .DS_Store
 usersData.json
 .env.console
+.env.ha
+.env
 secrets/
 data/
 backups/
@@ -18,3 +20,8 @@ runtime/*.json
 artifacts/
 .pytest_cache/
 *.tar.gz
+*.bak-*
+*.bak-*
+deploy/shared-db/runtime/
+deploy/shared-db/compose.database.staging.yml
+releases/

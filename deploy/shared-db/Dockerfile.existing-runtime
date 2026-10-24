@@ -1,0 +1,10 @@
+ARG SPARK_BASE_IMAGE
+FROM ${SPARK_BASE_IMAGE}
+USER root
+WORKDIR /app
+COPY requirements.txt requirements-console.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements-console.txt
+COPY --chown=spark:spark . /app
+USER spark
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 SPARK_LOG_DIR=/tmp/spark-logs
+CMD ["python", "-m", "spark_console.web.app"]

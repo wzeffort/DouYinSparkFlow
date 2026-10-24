@@ -69,6 +69,18 @@ class ResendTransport:
         )
 
     def _render(self, template_key: str, payload: dict[str, str]) -> tuple[str, str]:
+        if template_key == 'quota_gift':
+            username = html.escape(str(payload.get('username', '用户')))
+            days = html.escape(str(payload.get('days', '14')))
+            slots = html.escape(str(payload.get('slots', '1')))
+            expiry = html.escape(str(payload.get('expires_at', '')))
+            url = html.escape(self.public_base_url + '/tasks', quote=True)
+            return (f'火花守护：已赠送 {days} 天基础额度',
+                f'<h2>{days} 天额度已到账</h2><p>{username}，感谢使用火花守护！'
+                f'你的账号同时绑定了抖音和已验证邮箱，原有额度已到期，本次已为基础额度免费续期 {days} 天。</p>'
+                f'<p>任务名额：{slots} 个（数量保持不变）。有效至：{expiry}。</p>'
+                '<p>已暂停的任务不会自动恢复。请先检查抖音登录状态、好友和发送内容，再手动启用任务。</p>'
+                f'<p><a href="{url}">查看额度与任务</a></p><p>同一账号本次活动只赠送一次，无需付款。</p>')
         if template_key == "verify_email":
             code = html.escape(str(payload.get("code", "")))
             username = html.escape(str(payload.get("username", "用户")))
@@ -112,4 +124,22 @@ class ResendTransport:
                 f"<p>{reason}</p><p><a href='{url}'>查看并编辑任务</a></p>"
                 "<p>邮件中不包含消息内容、Cookie 或完整账号凭据。</p>",
             )
+        if template_key == "quota_migrated":
+            target = html.escape(str(payload.get("target_name", "目标好友")))
+            label = html.escape(str(payload.get("card_label", "新的有效额度")))
+            expiry = html.escape(str(payload.get("expires_at", "长期有效")))
+            return (
+                "任务额度已自动切换",
+                f"<h2>任务额度已自动切换</h2><p>好友“{target}”所在任务的原额度已到期，"
+                f"系统已自动切换至“{label}”，任务继续按原计划运行。</p>"
+                f"<p>新额度有效至：{expiry}。切换不会延长额度有效期。</p>"
+                f"<p><a href='{html.escape(self.public_base_url + '/tasks', quote=True)}'>查看任务与额度</a></p>",
+            )
+        if template_key == "renewal_submitted":
+            values = {key: html.escape(str(payload.get(key, ""))) for key in ("username", "order_id", "plan", "amount", "channel")}
+            return ("续卡付款待核实 · " + values["username"],
+                    f"<h2>用户已提交付款确认，请核实到账</h2><p>用户：{values['username']}</p>"
+                    f"<p>订单：{values['order_id']}</p><p>套餐：{values['plan']}，金额：¥{values['amount']}，方式：{values['channel']}</p>"
+                    "<p>这是用户自行提交的付款声明，尚未确认收款，额度未开通。请核对收款记录后在后台审核。</p>"
+                    f"<p><a href='{html.escape(self.public_base_url + '/admin/renewals?order=' + str(payload.get('order_id', '')), quote=True)}'>查看待核实订单</a></p>")
         raise ValueError("unsupported email template")

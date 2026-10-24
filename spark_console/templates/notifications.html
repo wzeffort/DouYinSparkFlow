@@ -1,7 +1,9 @@
 {% extends "base.html" %}
 {% block content %}
+<link rel="stylesheet" href="/static/referrals.css?v=20261010-ui1">
+<div class="message-page">
 <header class="page-head compact-page-head">
-  <div><h1>消息中心</h1><p>{{ '已发公告与我的系统提醒' if user.role == 'admin' else '平台公告与系统提醒' }} · 每页 8 条</p></div>
+  <div><h1>消息中心</h1><p>{{ '已发公告与我的系统提醒' if user.role == 'admin' else '平台公告与系统提醒' }}</p></div>
   {% if user.role == 'admin' %}<a class="button" href="/admin/announcements">发站内公告</a>{% endif %}
 </header>
 <section class="panel" id="notification-list">
@@ -16,12 +18,12 @@
       {% elif kind == 'announcement' %}
       <article class="timeline-card announcement-card {% if not recipient.read_at %}is-unread{% endif %}">
         <div><span class="status-pill">平台公告</span><h2>{{ notice.title }}</h2><p class="announcement-body">{{ notice.body }}</p><small class="muted">{{ occurred_at|shanghai_time }}</small></div>
-        {% if not recipient.read_at %}<form method="post" action="/announcements/{{ notice.id }}/read"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">标为已读</button></form>{% endif %}
+
       </article>
       {% else %}
       <article class="timeline-card {% if not notice.read_at %}is-unread{% endif %}">
         <div><span class="status-pill">系统提醒</span><h2>{{ notice.title }}</h2><p>{{ notice.summary }}</p><small class="muted">{{ occurred_at|shanghai_time }}</small></div>
-        <div class="action-row">{% if notice.action_path %}<a class="button-link" href="{{ notice.action_path }}">立即处理</a>{% endif %}{% if not notice.read_at %}<form method="post" action="/messages/system/{{ notice.id }}/read"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">标为已读</button></form>{% endif %}</div>
+        <div class="action-row">{% if notice.action_path %}<a class="button-link" href="{{ notice.action_path }}">立即处理</a>{% endif %}</div>
       </article>
       {% endif %}
     {% else %}
@@ -30,4 +32,5 @@
   </div>
   {% if pages > 1 %}<nav class="admin-pager" aria-label="消息分页">{% if page_number > 1 %}<a class="quiet compact-button" href="?page_number={{ page_number - 1 }}#notification-list">上一页</a>{% endif %}<span>第 {{ page_number }} / {{ pages }} 页 · 共 {{ message_total }} 条</span>{% if page_number < pages %}<a class="quiet compact-button" href="?page_number={{ page_number + 1 }}#notification-list">下一页</a>{% endif %}</nav>{% endif %}
 </section>
+</div>
 {% endblock %}

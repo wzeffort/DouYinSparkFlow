@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="push-settings">
+<header class="page-head compact-page-head"><div><h1>微信与 QQ 通知</h1><p>通过 PushPlus 接收任务结果和登录失效提醒。</p></div></header>
+{% if error %}<div class="panel" role="alert">{{ error }}</div>{% endif %}
+{% if notice == 'saved' %}<div class="panel" role="status">配置已保存。从现在起接收所选通知，不补发历史任务；原有待发通知已取消。</div>{% endif %}
+{% if notice == 'queued' %}<div class="panel" role="status">测试已加入队列，请稍后刷新查看状态，并确认微信或 QQ 实际收到。</div>{% endif %}
+{% if notice == 'deleted' %}<div class="panel" role="status">配置、凭证和该渠道的通知记录已删除。</div>{% endif %}
+<section class="panel">
+  <h2>先完成接收绑定</h2>
+  <p>登录 <a href="https://www.pushplus.plus/" target="_blank" rel="noopener noreferrer">PushPlus</a>，完成实名认证，复制用户 Token 或消息 Token。</p>
+  <p>微信：按平台引导关注并绑定接收消息的服务号。QQ：在「个人中心 → 渠道配置 → QQ机器人」扫码绑定。发给自己的 QQ 时渠道编码留空；发到 QQ 群时先在 PushPlus 完成群配置，再填其编码（不是 QQ 群号）。</p>
+  <p>任务名称和执行状态将交给 PushPlus 推送。凭证加密保存，不会再次显示。平台额度和消息展示规则以 PushPlus 为准。</p>
+  <p><a href="https://www.pushplus.plus/doc/channel/qq.html" target="_blank" rel="noopener noreferrer">QQ 绑定说明</a> · 普通实名用户的 QQ 通知可能仅显示标题摘要。</p>
+</section>
+<div class="push-channel-grid">
+{% for name, label in channel_labels.items() %}
+{% set config = channels.get(name) %}
+<section class="panel">
+  <h2>{{ label }}</h2>
+  {% if config and config.blocked_code %}<p role="alert">{{ errors.get(config.blocked_code, '平台拒绝发送，请检查 PushPlus 配置后重新保存。') }}</p>{% endif %}
+  <form method="post" action="/settings/push/{{ name }}" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+    <label>PushPlus Token {{ '（已保存，留空保留）' if config else '（必填）' }}<input type="password" name="token" autocomplete="new-password" maxlength="128" {% if not config %}required{% endif %} placeholder="{{ '留空保留已保存的 Token' if config else '粘贴 PushPlus Token' }}"></label>
+    <label>{{ 'QQ 渠道编码（可选）' if name == 'qq' else '微信公众号渠道参数（可选）' }}<input name="option" value="{{ options.get(name, '') }}" maxlength="128" placeholder="留空使用默认接收渠道"></label>
+    <label class="checkbox-row"><input type="checkbox" name="enabled" value="1" {% if not config or config.enabled %}checked{% endif %}>启用{{ label }}通知</label>
+    <label class="checkbox-row"><input type="checkbox" name="task_success" value="1" {% if config and config.task_success %}checked{% endif %}>任务成功 / 已提交时通知</label>
+    <label class="checkbox-row"><input type="checkbox" name="task_failure" value="1" {% if not config or config.task_failure %}checked{% endif %}>任务失败 / 部分完成时通知</label>
+    <label class="checkbox-row"><input type="checkbox" name="login_expired" value="1" {% if not config or config.login_expired %}checked{% endif %}>抖音登录失效时通知</label>
+    <button type="submit">保存{{ label }}配置</button>
+  </form>
+  {% if config %}<div class="action-row">
+    <form method="post" action="/settings/push/{{ name }}/test"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="quiet">发送测试（使用已保存配置）</button></form>
+    <form method="post" action="/settings/push/{{ name }}/delete" data-confirm="删除此渠道配置及通知记录？"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="danger quiet">删除配置</button></form>
+  </div>{% endif %}
+</section>
+{% endfor %}
+</div>
+<section class="panel">
+  <h2>最近通知</h2><p>每次任务完成生成一条结果通知；同一登录失效事件只提醒一次。平台已受理不代表消息已送达，实际接收请在微信 / QQ 或 PushPlus 消息记录中核实。</p>
+  <div class="timeline">
+  {% for item, channel in deliveries %}
+    <article class="timeline-card"><div><strong>{{ channel_labels[channel] }} · {{ {'test':'测试通知','task':'任务结果','login':'登录失效'}.get(item.kind, '通知') }}</strong><p>{{ statuses.get(item.status, item.status) }}{% if item.error_code %} · {{ errors.get(item.error_code, '平台请求失败，请检查配置或稍后重试') }}{% endif %}</p><small>{{ item.created_at|shanghai_time }} · 已尝试 {{ item.attempts }} 次</small></div></article>
+  {% else %}<p class="muted">暂无通知。保存配置后可以发送测试。</p>{% endfor %}
+  </div>
+</section>
+</div>
+{% endblock %}

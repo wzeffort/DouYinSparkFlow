@@ -2,7 +2,8 @@
 <section class="auth-card registration-card">
   <div class="brand solo"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></div>
   <h1>创建账号</h1>
-  <p class="muted">输入管理员提供的邀请码即可加入。</p>
+  <p class="muted">直接注册试用 3 天；好友邀请码试用 7 天，管理员邀请码试用 14 天。完成邀请核验还可获得活动奖励。</p>
+  {% if request.query_params.get('demo') == '1' %}<div class="email-toast email-toast-success" role="status">你正在预览模式——注册后即可绑定账号、保存任务并自动发送问候。</div>{% endif %}
   {% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
   <form method="post" class="stack registration-form" data-registration-form novalidate>
     <label>用户名
@@ -18,25 +19,23 @@
     </label>
     {% endif %}
     <label>密码
-      <input type="password" name="password" autocomplete="new-password" minlength="12" required{% if field_errors.get('password') %} aria-invalid="true" aria-describedby="password-error password-rules"{% endif %}>
+      <input type="password" name="password" autocomplete="new-password" minlength="9" required{% if field_errors.get('password') %} aria-invalid="true" aria-describedby="password-error password-rules"{% endif %}>
       <span id="password-rules" class="password-rules" aria-live="polite">
-        <small data-password-rule="length">至少 12 位</small>
-        <small data-password-rule="letter">包含字母</small>
-        <small data-password-rule="number">包含数字</small>
+        <small data-password-rule="length">至少 9 位</small>
       </span>
       <small id="password-error" class="field-error" data-field-error="password"{% if not field_errors.get('password') %} hidden{% endif %}>{{ field_errors.get('password', '') }}</small>
     </label>
     <label>确认密码
-      <input type="password" name="password_confirmation" autocomplete="new-password" minlength="12" required{% if field_errors.get('password_confirmation') %} aria-invalid="true" aria-describedby="password-confirmation-error"{% endif %}>
+      <input type="password" name="password_confirmation" autocomplete="new-password" minlength="9" required{% if field_errors.get('password_confirmation') %} aria-invalid="true" aria-describedby="password-confirmation-error"{% endif %}>
       <small id="password-confirmation-error" class="field-error" data-field-error="password_confirmation"{% if not field_errors.get('password_confirmation') %} hidden{% endif %}>{{ field_errors.get('password_confirmation', '') }}</small>
     </label>
-    <label>邀请码
-      <input name="invite_code" value="{{ form_values.get('invite_code', '') }}" autocomplete="off" required{% if field_errors.get('invite_code') %} aria-invalid="true" aria-describedby="invite-code-error"{% endif %}>
+    <label>邀请码（选填）
+      <input name="invite_code" value="{{ form_values.get('invite_code', '') }}" autocomplete="off"{% if field_errors.get('invite_code') %} aria-invalid="true" aria-describedby="invite-code-error"{% endif %}>
       <small id="invite-code-error" class="field-error" data-field-error="invite_code"{% if not field_errors.get('invite_code') %} hidden{% endif %}>{{ field_errors.get('invite_code', '') }}</small>
     </label>
     <button type="submit">{% if email_enabled %}发送邮箱验证码{% else %}注册并返回登录{% endif %}</button>
   </form>
   <p class="auth-link">已有账号？<a href="/login">返回登录</a></p>
 </section>
-<script defer src="/static/register.js?v=20260906-rules2"></script>
+<script defer src="/static/register.js?v=20261010-length9"></script>
 {% endblock %}

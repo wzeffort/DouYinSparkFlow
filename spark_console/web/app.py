@@ -6,15 +6,16 @@ import threading
 from datetime import datetime, timedelta, timezone
 from math import ceil
 from pathlib import Path
-from urllib.parse import urlencode
+from urllib.parse import quote, urlencode
 from zoneinfo import ZoneInfo
 
 import uvicorn
-from fastapi import FastAPI, Form, HTTPException, Request
+from fastapi import FastAPI, Form, HTTPException, Request, Response
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.engine import Engine
 
 from spark_console.config import Settings
@@ -40,7 +41,7 @@ from spark_console.models import (
     WebSession,
 )
 from spark_console.rate_limit import FailedAttemptLimiter, BoundedRequestLimiter
-from spark_console.security import PasswordService, SessionService
+from spark_console.security import DUMMY_PASSWORD_HASH, PasswordService, SessionService
 from spark_console.services.accounts import AccountService
 from spark_console.services.contacts import contact_items
 from spark_console.services.audits import AuditService
@@ -64,7 +65,11 @@ from spark_console.web.recipient_review_routes import build_recipient_review_rou
 from spark_console.services.user_directory import UserDirectoryService
 from spark_console.web.registration_routes import registration_client_key
 from spark_console.web.security_headers import SecurityBoundaryMiddleware
+from spark_console.web.renewal_routes import build_renewal_router
+from spark_console.web.profile_routes import build_profile_router
+from spark_console.services.profiles import ProfileService
 from spark_console.web.contact_routes import build_contact_router
+from spark_console.web import demo_pages
 
 
 PACKAGE_ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +98,7 @@ RUN_STAGE_LABELS = {
     "submitted": "已提交发送",
     "claimed": "已领取",
     "complete": "已完成",
+    "page_confirmed": "成功（页面确认）",
     "missed_startup": "执行器离线",
     "late": "超过发送窗口",
     "clock_check": "时间校验",
@@ -221,6 +227,11 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
     app.state.settings = settings
     app.state.engine = engine
+    @app.middleware('http')
+    async def standby_read_only(request, call_next):
+        if settings.standby_mode and request.method not in {'GET', 'HEAD', 'OPTIONS'}:
+            return JSONResponse({'detail': 'Standby deployment awaiting database cutover'}, status_code=503)
+        return await call_next(request)
     app.mount("/static", StaticFiles(directory=str(PACKAGE_ROOT / "static")), name="static")
     passwords = PasswordService()
     sessions = SessionService(settings.session_key_file.read_bytes())
@@ -242,7 +253,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     app.include_router(build_contact_router(engine, auth))
     registration_limiter = FailedAttemptLimiter()
     login_ip_limiter = BoundedRequestLimiter()
-    login_global_limiter = BoundedRequestLimiter(limit=60, window_seconds=60)
+    # Per-IP and per-account limits carry the brute-force defence; keep the
+    # global ceiling high enough that one spraying source cannot starve every
+    # legitimate login of its 60-second budget.
+    login_global_limiter = BoundedRequestLimiter(limit=200, window_seconds=60)
     login_lock = auth.mutation_lock
     cipher = CookieCipher(settings.cookie_key_file.read_bytes())
     pii = (
@@ -254,6 +268,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     def page(request: Request, name: str, status_code: int = 200, **context):
         context.setdefault("email_enabled", settings.email_enabled)
+        context.setdefault("push_enabled", settings.push_enabled)
         return templates.TemplateResponse(
             request=request, name=name, context=context, status_code=status_code
         )
@@ -413,16 +428,75 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             pii, settings.email_enabled,
         )
     )
-    app.include_router(build_account_scan_router(engine, auth, cipher))
+    app.include_router(build_account_scan_router(engine, auth, cipher, pii=pii))
+    app.include_router(build_renewal_router(engine, auth, pii, page))
+    app.include_router(build_profile_router(engine, auth, passwords, pii, page))
     app.include_router(build_announcement_router(engine, auth, page))
     app.include_router(build_retry_router(engine, auth, page, task_write_lock))
     app.include_router(build_recipient_review_router(engine, auth, page, task_write_lock))
     if pii is not None:
         app.include_router(build_email_router(engine, auth, passwords, pii, page))
+        from spark_console.web.referral_routes import build_referral_router
+        from spark_console.services.referrals import ReferralService
+        with session_scope(engine) as db:
+            ReferralService(db, pii).seed_existing()
+        app.include_router(build_referral_router(engine, auth, pii, cipher, page, settings.public_base_url))
+    if settings.push_enabled and settings.pii_key_file is not None:
+        from spark_console.web.push_routes import build_push_router
+        push_pii = PiiCipher(settings.pii_key_file.read_bytes())
+        app.include_router(build_push_router(engine, auth, push_pii, page))
+
+    def wants_demo(request: Request) -> bool:
+        # Pure UI marker, never an authentication token: demo pages render
+        # static sample data and every write path still demands a real login.
+        return request.cookies.get("spark_demo") == "1"
+
+    @app.get("/demo/on")
+    def demo_on(request: Request):
+        response = RedirectResponse("/dashboard", status_code=303)
+        response.set_cookie("spark_demo", "1", httponly=True,
+                            secure=settings.secure_cookies, samesite="strict")
+        return response
+
+    @app.get("/demo/off")
+    def demo_off(request: Request):
+        response = RedirectResponse("/", status_code=303)
+        response.delete_cookie("spark_demo")
+        return response
+
+    def demo_page(request: Request, key: str):
+        context = demo_pages.context_for(key)
+        title = context.pop("title", None)
+        return page(request, f"{key}.html", title=title, **context)
 
     @app.exception_handler(401)
     async def unauthorized(request: Request, _exc):
-        return RedirectResponse("/login", status_code=303)
+        if wants_demo(request):
+            # Demo visitors have seen the product; operations lead to signup.
+            return RedirectResponse("/register?demo=1", status_code=303)
+        target = "/login"
+        if request.method == "GET" and request.url.path not in ("/login", "/logout"):
+            # Offer to return the visitor to the page that asked for a session.
+            target += "?next=" + quote(request.url.path, safe="/")
+        return RedirectResponse(target, status_code=303)
+
+    @app.exception_handler(RequestValidationError)
+    async def malformed_form(request: Request, exc: RequestValidationError):
+        if request.url.path == "/login" and request.method == "POST":
+            # Missing/tampered form fields must never surface raw JSON on the
+            # login screen.
+            return page(
+                request, "login.html", 400, title="登录", nav=False,
+                error="请输入用户名和密码后再提交",
+                next=_safe_next(request.query_params.get("next", "")),
+            )
+        # Default shape, minus submitted values: pydantic error dicts carry the
+        # raw "input" (here potentially a password) and must not echo back.
+        cleaned = [
+            {key: value for key, value in error.items() if key not in ("input", "ctx")}
+            for error in exc.errors()
+        ]
+        return JSONResponse({"detail": cleaned}, status_code=422)
 
     @app.exception_handler(NotFound)
     async def resource_not_found(_request: Request, _exc):
@@ -442,23 +516,62 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def ready():
         with engine.connect() as connection:
             connection.exec_driver_sql("SELECT 1")
+        if settings.standby_mode:
+            return JSONResponse({'status': 'standby', 'database': 'connected'}, status_code=503)
         return {"status": "ready"}
 
     @app.get("/")
-    def root():
-        return RedirectResponse("/dashboard", status_code=303)
+    def root(request: Request):
+        # Anonymous requests must never pay the cross-host lock round-trip:
+        # only open a session when a session cookie is actually present.
+        if request.cookies.get("spark_session"):
+            with session_scope(engine) as db:
+                try:
+                    auth.current(request, db)
+                except HTTPException:
+                    pass
+                else:
+                    return RedirectResponse("/dashboard", status_code=303)
+        # Anonymous visitors get a public product page instead of a
+        # bare login wall.
+        return page(
+            request, "landing.html",
+            title="让每天的问候准时抵达",
+            nav=False, landing=True,
+        )
+
+    @app.get("/robots.txt")
+    def robots():
+        return Response("User-agent: *\nAllow: /\n", media_type="text/plain")
+
+    def _safe_next(candidate: str) -> str:
+        # Only same-site absolute paths may ride along; blocks open redirects.
+        return candidate if candidate.startswith("/") and not candidate.startswith("//") else ""
 
     @app.get("/login")
     def login_page(request: Request):
+        if request.cookies.get("spark_session"):
+            with session_scope(engine) as db:
+                try:
+                    auth.current(request, db)
+                except HTTPException:
+                    pass
+                else:
+                    return RedirectResponse("/dashboard", status_code=303)
         return page(
             request, "login.html", title="登录", nav=False,
             password_reset=request.query_params.get("password_reset") == "1",
+            next=_safe_next(request.query_params.get("next", "")),
         )
 
     @app.post("/login")
-    def login(request: Request, username: str = Form(), password: str = Form()):
+    def login(request: Request, username: str = Form(), password: str = Form(), next: str = Form(default="")):
+        next_target = _safe_next(next)
+
         def throttled():
             return page(request, "login.html", 429, title="登录", nav=False,
+                        next=next_target,
+                        last_username=username.strip()[:254],
                         error="尝试过于频繁，请稍后再试")
 
         if not login_ip_limiter.allow(registration_client_key(request)) or not login_global_limiter.allow('login'):
@@ -471,37 +584,54 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             response.headers['Retry-After'] = '5'
             return response
         try:
-            return login_locked(request, username, password)
+            return login_locked(request, username, password, next_target)
         finally:
             login_lock.release()
 
-    def login_locked(request, username, password):
+    def login_locked(request, username, password, next_target=""):
         with session_scope(engine) as db:
             identifier = username.strip().lower()
-            user = db.scalar(select(User).where(User.username == identifier))
-            if user is None and pii is not None:
-                try:
-                    email_lookup_hash = pii.lookup_hash(identifier)
-                except ValueError:
-                    email_lookup_hash = None
-                if email_lookup_hash is not None:
-                    user = db.scalar(
-                        select(User).where(
-                            User.email_lookup_hash == email_lookup_hash,
-                            User.email_verified_at.is_not(None),
+            # Registration bounds usernames and passwords; oversized input can
+            # never match an account, so refuse it before the database or the
+            # hasher sees it.
+            oversized = len(identifier) > 254 or len(password) > 128
+            user = None
+            if not oversized:
+                user = db.scalar(select(User).where(User.username == identifier))
+                if user is None and pii is not None:
+                    try:
+                        email_lookup_hash = pii.lookup_hash(identifier)
+                    except ValueError:
+                        email_lookup_hash = None
+                    if email_lookup_hash is not None:
+                        user = db.scalar(
+                            select(User).where(
+                                User.email_lookup_hash == email_lookup_hash,
+                                User.email_verified_at.is_not(None),
+                            )
                         )
-                    )
             now = datetime.now(timezone.utc)
             if user is not None and user.locked_until is not None:
                 if _aware_utc(user.locked_until) > now:
                     response = page(request, "login.html", 429, title="登录", nav=False,
+                                    next=next_target,
+                                    last_username=identifier,
                                     error="尝试过于频繁，请稍后再试")
                     response.headers['Retry-After'] = str(max(1, int((_aware_utc(user.locked_until) - now).total_seconds())))
                     return response
                 user.locked_until = None
                 user.failed_login_count = 0
-            valid = user is not None and user.status == "active" and passwords.verify(user.password_hash, password)
+            valid = (
+                not oversized
+                and user is not None
+                and user.status == "active"
+                and passwords.verify(user.password_hash, password)
+            )
             if not valid:
+                if user is None or (user is not None and user.status != "active"):
+                    # Burn the same argon2 work for unknown or disabled accounts
+                    # so response time cannot reveal whether the user exists.
+                    passwords.verify(DUMMY_PASSWORD_HASH, password)
                 if user is not None:
                     user.failed_login_count += 1
                     if user.failed_login_count >= 10:
@@ -512,13 +642,22 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     status_code=400,
                     title="登录",
                     nav=False,
+                    next=next_target,
+                    last_username=identifier,
                     error=("用户名、邮箱或密码错误" if pii is not None else "用户名或密码错误"),
                 )
             user.failed_login_count = 0
             user.locked_until = None
             raw, record = sessions.create_record(user.id)
             db.add(record)
-            destination = "/change-password" if user.must_change_password else "/dashboard"
+            # Expired session rows are otherwise never reclaimed; piggyback a
+            # bounded purge on successful logins so the table stays small.
+            db.execute(delete(WebSession).where(WebSession.expires_at < now))
+            # A pending password change always outranks any post-login target.
+            if user.must_change_password:
+                destination = "/change-password"
+            else:
+                destination = next_target or "/dashboard"
         response = RedirectResponse(destination, status_code=303)
         response.set_cookie(
             "spark_session",
@@ -544,6 +683,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def change_password_page(request: Request):
         with session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
+            if not user.must_change_password:
+                return RedirectResponse('/profile#password', 303)
             return page(
                 request,
                 "change_password.html",
@@ -565,33 +706,10 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with auth.mutation_lock, session_scope(engine) as db:
             user, record = auth.current(request, db, allow_change=True)
             auth.csrf(record, csrf_token)
-            if not passwords.verify(user.password_hash, current_password):
-                return page(
-                    request,
-                    "change_password.html",
-                    400,
-                    title="修改密码",
-                    nav=not user.must_change_password,
-                    user=user,
-                    csrf_token=record.csrf_token,
-                    is_admin=user.role == "admin",
-                    error="当前密码错误",
-                )
-            if new_password != new_password_confirmation:
-                return page(
-                    request,
-                    "change_password.html",
-                    400,
-                    title="修改密码",
-                    nav=not user.must_change_password,
-                    user=user,
-                    csrf_token=record.csrf_token,
-                    is_admin=user.role == "admin",
-                    error="两次输入的新密码不一致",
-                )
             try:
-                user.password_hash = passwords.hash(new_password)
-            except ValueError:
+                ProfileService(db, passwords, AuditService(db)).change_password(
+                    user, current_password, new_password, new_password_confirmation)
+            except ValidationError as error:
                 return page(
                     request,
                     "change_password.html",
@@ -601,12 +719,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     user=user,
                     csrf_token=record.csrf_token,
                     is_admin=user.role == "admin",
-                    error="新密码至少需要 12 位",
+                    error=str(error),
                 )
-            user.must_change_password = False
-            user.failed_login_count = 0
-            user.locked_until = None
-            db.query(WebSession).filter(WebSession.user_id == user.id).delete(synchronize_session=False)
             raw, fresh_session = sessions.create_record(user.id)
             db.add(fresh_session)
         response = RedirectResponse("/dashboard", status_code=303)
@@ -616,8 +730,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.get("/dashboard")
     def dashboard(request: Request):
+        if not request.cookies.get("spark_session"):
+            if wants_demo(request):
+                return demo_page(request, "dashboard")
+            raise HTTPException(401)
         with session_scope(engine) as db:
-            user, _record, context = auth.user_context(request, db)
+            try:
+                user, _record, context = auth.user_context(request, db)
+            except HTTPException:
+                if wants_demo(request):
+                    return demo_page(request, "dashboard")
+                raise
             TaskCapacityService(db, AuditService(db)).reconcile_all()
             tasks = db.scalars(select(SparkTask).where(SparkTask.owner_user_id == user.id)).all()
             accounts = db.scalars(select(DouyinAccount).where(DouyinAccount.owner_user_id == user.id)).all()
@@ -635,6 +758,15 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.get("/api/platform-status")
     def platform_status_api(request: Request):
+        if wants_demo(request):
+            status = demo_pages._platform_status()
+            return {
+                "total": status.total, "success": status.success,
+                "confirmed": status.confirmed, "submitted": status.submitted,
+                "running": status.running, "pending": status.pending,
+                "failed": status.failed, "worker_online": status.worker_online,
+                "updated_at": status.updated_at.isoformat(),
+            }
         with session_scope(engine) as db:
             auth.current(request, db)
             TaskCapacityService(db, AuditService(db)).reconcile_all()
@@ -655,6 +787,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
     def accounts_page(request: Request):
         with session_scope(engine) as db:
             user, _record, context = auth.user_context(request, db)
+            if pii is not None:
+                from spark_console.services.referrals import ReferralService
+                ReferralService(db, pii).review_bindings(user)
             accounts = AccountService(db, cipher, AuditService(db)).list_owned(user.id)
             return page(request, "accounts.html", title="抖音账号", accounts=accounts, **context)
 
@@ -676,8 +811,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.get("/tasks")
     def tasks_page(request: Request):
+        if not request.cookies.get("spark_session"):
+            if wants_demo(request):
+                return demo_page(request, "tasks")
+            raise HTTPException(401)
         with session_scope(engine) as db:
-            user, _record, context = auth.user_context(request, db)
+            try:
+                user, _record, context = auth.user_context(request, db)
+            except HTTPException:
+                if wants_demo(request):
+                    return demo_page(request, "tasks")
+                raise
             task_service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
             accounts = AccountService(db, cipher, AuditService(db)).list_owned(user.id)
             capacity = TaskCapacityService(db, AuditService(db))
@@ -736,7 +880,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with task_write_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
-            service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
+            service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db), pii=pii)
             try:
                 service.create(
                     user.id,
@@ -780,7 +924,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with session_scope(engine) as db:
             user, _record, context = auth.user_context(request, db)
             account_service = AccountService(db, cipher, AuditService(db))
-            service = TaskService(db, account_service, AuditService(db))
+            service = TaskService(db, account_service, AuditService(db), pii=pii)
             try:
                 task = service.get_owned(user.id, task_id)
             except NotFound as error:
@@ -821,7 +965,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
             account_service = AccountService(db, cipher, AuditService(db))
-            service = TaskService(db, account_service, AuditService(db))
+            service = TaskService(db, account_service, AuditService(db), pii=pii)
             try:
                 task = service.get_owned(user.id, task_id)
                 service.update_owned(
@@ -863,7 +1007,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
         with task_write_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
-            service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db))
+            service = TaskService(db, AccountService(db, cipher, AuditService(db)), AuditService(db), pii=pii)
             task = service.get_owned(user.id, task_id)
             try:
                 service.set_enabled_owned(user.id, task_id, not task.enabled)
@@ -891,8 +1035,17 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
 
     @app.get("/runs")
     def runs_page(request: Request):
+        if not request.cookies.get("spark_session"):
+            if wants_demo(request):
+                return demo_page(request, "runs")
+            raise HTTPException(401)
         with session_scope(engine) as db:
-            user, _record, context = auth.user_context(request, db)
+            try:
+                user, _record, context = auth.user_context(request, db)
+            except HTTPException:
+                if wants_demo(request):
+                    return demo_page(request, "runs")
+                raise
             show_run_owner = user.role == "admin"
             run_query = (
                 select(TaskRun, SparkTask, User, DouyinAccount)
@@ -1156,7 +1309,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 capacity=TaskCapacityService(db,AuditService(db))
                 if not capacity._grant_active(grant,datetime.now(timezone.utc)):
                     raise ValidationError('此名额尚未生效、已到期或已撤销，请先续期')
-                service=TaskService(db,AccountService(db,cipher,AuditService(db)),AuditService(db))
+                service=TaskService(db,AccountService(db,cipher,AuditService(db)),AuditService(db),pii=pii)
                 tasks=db.scalars(select(SparkTask).join(TaskQuotaBinding,TaskQuotaBinding.task_id==SparkTask.id).where(
                     TaskQuotaBinding.grant_id==grant.id,SparkTask.owner_user_id==grant.user_id,SparkTask.enabled.is_(False))).all()
                 for task in tasks:
@@ -1298,6 +1451,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                     db,
                     AccountService(db, cipher, AuditService(db)),
                     AuditService(db),
+                    pii=pii,
                 ).set_enabled(task, not task.enabled, admin.id)
             except ValidationError:
                 notice = "task_slot_full"
@@ -1377,7 +1531,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
             if task is None:
                 raise HTTPException(404)
             account_service = AccountService(db, cipher, AuditService(db))
-            service = TaskService(db, account_service, AuditService(db))
+            service = TaskService(db, account_service, AuditService(db), pii=pii)
             try:
                 service.update_owned(
                     task.owner_user_id,

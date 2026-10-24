@@ -1,0 +1,72 @@
+name: spark-shared-apps
+x-common: &common
+  image: ${SPARK_RELEASE_IMAGE:?set an image built from the approved Git commit}
+  restart: unless-stopped
+  network_mode: host
+  env_file: .env.ha
+  depends_on:
+    spark-init:
+      condition: service_completed_successfully
+  environment:
+    SPARK_DATA_DIR: /data
+    SPARK_COOKIE_KEY_FILE: /run/secrets/cookie.key
+    SPARK_SESSION_KEY_FILE: /run/secrets/session.key
+    SPARK_PII_KEY_FILE: /run/secrets/pii.key
+    SPARK_WEB_BIND: 127.0.0.1
+    SPARK_WEB_PORT: "8900"
+    SPARK_CLUSTER_MODE: "true"
+  volumes:
+    - spark-runtime:/data
+    - ./secrets/cookie.key:/run/secrets/cookie.key:ro
+    - ./secrets/session.key:/run/secrets/session.key:ro
+    - ./secrets/pii.key:/run/secrets/pii.key:ro
+    - ./runtime:/run/spark-health:ro
+  read_only: true
+  init: true
+  security_opt: [no-new-privileges:true]
+  logging:
+    driver: json-file
+    options: {max-size: 10m, max-file: "3"}
+services:
+  spark-init:
+    image: ${SPARK_RELEASE_IMAGE:?set an image built from the approved Git commit}
+    user: "0:0"
+    command: [chown, "10001:10001", /data]
+    network_mode: none
+    read_only: true
+    security_opt: [no-new-privileges:true]
+    volumes: ["spark-runtime:/data"]
+  spark-web:
+    <<: *common
+    command: [python, -m, spark_console.web.app]
+    mem_limit: 384m
+    cpus: 0.50
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=64m"]
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8900/health/ready', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  spark-worker:
+    profiles: [background]
+    <<: *common
+    command: [python, -m, spark_console.worker]
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+  spark-auth:
+    profiles: [background]
+    <<: *common
+    command: [python, -m, spark_console.auth_worker]
+    mem_limit: 768m
+    cpus: 1.0
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=256m"]
+  spark-notifier:
+    profiles: [background]
+    <<: *common
+    command: [python, -m, spark_console.notifier]
+    mem_limit: 192m
+    cpus: 0.25
+    tmpfs: ["/tmp:rw,noexec,nosuid,size=32m"]
+volumes:
+  spark-runtime:

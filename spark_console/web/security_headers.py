@@ -32,20 +32,30 @@ class SecurityBoundaryMiddleware:
                     "style-src 'self' 'unsafe-inline'; font-src 'self'; "
                     f"script-src 'self' 'nonce-{nonce}'"
                 )
-                if not scope['path'].startswith('/static/'):
+                if scope['path'].startswith('/static/'):
+                    # Every template reference to /static/ carries a ?v= cache
+                    # buster, so a year-long immutable lifetime never serves a
+                    # stale asset across releases.
+                    headers['Cache-Control'] = 'public, max-age=31536000, immutable'
+                elif scope['path'] == '/profile/avatar':
+                    headers['Cache-Control'] = 'private, no-store'
+                else:
                     headers['Cache-Control'] = 'no-store'
                 if self.secure:
                     headers['Strict-Transport-Security'] = 'max-age=31536000'
             await send(message)
 
-        # No uploads in this console. Count actual streamed bytes as well as declared sizes.
+        # Only image upload endpoints get room for a 2 MiB file and multipart fields.
+        uploads = {'/profile/avatar', '/admin/renewals/codes/wechat', '/admin/renewals/codes/alipay'}
+        body_limit = 2 * 1024 * 1024 + 16384 if scope.get('method') == 'POST' and scope['path'] in uploads else self.max_body
+        # Count actual streamed bytes; a declared Content-Length cannot bypass this boundary.
         body = bytearray()
         while True:
             message = await receive()
             if message['type'] == 'http.disconnect':
                 return
             chunk = message.get('body', b'')
-            if len(body) + len(chunk) > self.max_body:
+            if len(body) + len(chunk) > body_limit:
                 return await PlainTextResponse('Request too large', 413)(scope, receive, protected_send)
             body.extend(chunk)
             if not message.get('more_body', False):

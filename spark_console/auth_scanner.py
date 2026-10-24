@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from typing import Callable
 from urllib.parse import urlparse
 
+from spark_console.douyin_referral_identity import read_verified_user_id
+
 from core.web_chat import (
     CONVERSATION_ITEM_SELECTOR,
     CONVERSATION_TITLE_SELECTOR,
@@ -75,6 +77,7 @@ class ScannedAccount:
     storage_state: dict[str, object]
     conversation_names: tuple[str, ...] = ()
     contact_identities: tuple[DouyinUserIdentity, ...] = ()
+    platform_user_id: str | None = None
 
 
 @dataclass
@@ -282,12 +285,16 @@ class DouyinQrScanner:
             contact_identities = await self._await_stage(
                 prepared.user_info.drain(), cancelled, deadline
             )
+            platform_user_id = await self._await_stage(
+                read_verified_user_id(prepared.context), cancelled, deadline
+            )
             return ScannedAccount(
                 display_name,
                 unique_id,
                 storage_state,
                 conversation_names,
                 contact_identities,
+                platform_user_id,
             )
         finally:
             await prepared.context.close()

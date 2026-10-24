@@ -1,0 +1,5 @@
+{
+  "spark-web": "spark-shared-apps-spark-web-1",
+  "bps-web": "bps-bps-web-1",
+  "bps-db": "bps-bps-db-1"
+}

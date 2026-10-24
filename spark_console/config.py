@@ -8,7 +8,7 @@ from typing import Mapping
 @dataclass(frozen=True)
 class Settings:
     data_dir: Path
-    database_url: str
+    database_url: str = field(repr=False)
     cookie_key_file: Path
     session_key_file: Path
     timezone: str = "Asia/Shanghai"
@@ -22,13 +22,18 @@ class Settings:
     pii_key_file: Path | None = None
     public_base_url: str = ""
     email_enabled: bool = False
+    push_enabled: bool = False
     email_poll_seconds: int = 10
     resend_api_key: str = field(default="", repr=False)
     resend_from: str = ""
     health_snapshot_path: Path | None = None
+    standby_mode: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str]) -> "Settings":
+        if environ.get('SPARK_CLUSTER_MODE', '').lower() == 'true':
+            if not environ.get('SPARK_DATABASE_URL', '').startswith('postgresql+psycopg://'):
+                raise ValueError('cluster mode requires an explicit PostgreSQL database URL')
         try:
             data_dir = Path(environ["SPARK_DATA_DIR"]).resolve()
             cookie_key_file = Path(environ["SPARK_COOKIE_KEY_FILE"]).resolve()
@@ -46,10 +51,13 @@ class Settings:
             "1", "true", "yes", "on"
         }
         pii_key_file = None
+        push_enabled = environ.get("SPARK_PUSH_ENABLED", "false").strip().lower() in {
+            "1", "true", "yes", "on"
+        }
         public_base_url = environ.get("SPARK_PUBLIC_BASE_URL", "").strip().rstrip("/")
         resend_api_key = environ.get("RESEND_API_KEY", "").strip()
         resend_from = environ.get("RESEND_FROM", "").strip()
-        if email_enabled:
+        if email_enabled or push_enabled:
             raw_pii_path = environ.get("SPARK_PII_KEY_FILE", "").strip()
             if not raw_pii_path:
                 raise ValueError("missing required setting: SPARK_PII_KEY_FILE")
@@ -58,10 +66,11 @@ class Settings:
                 raise ValueError("PII key must be exactly 32 bytes")
             if not public_base_url.startswith("https://"):
                 raise ValueError("SPARK_PUBLIC_BASE_URL must use HTTPS")
-            if not resend_api_key or not resend_from:
+            if email_enabled and (not resend_api_key or not resend_from):
                 raise ValueError("email requires RESEND_API_KEY and RESEND_FROM")
 
         return cls(
+            standby_mode=environ.get('SPARK_STANDBY_MODE', '').lower() == 'true',
             data_dir=data_dir,
             database_url=environ.get(
                 "SPARK_DATABASE_URL", f"sqlite:///{data_dir / 'spark.db'}"
@@ -86,6 +95,7 @@ class Settings:
             pii_key_file=pii_key_file,
             public_base_url=public_base_url,
             email_enabled=email_enabled,
+            push_enabled=push_enabled,
             email_poll_seconds=max(
                 1, int(environ.get("SPARK_EMAIL_POLL_SECONDS", "10"))
             ),

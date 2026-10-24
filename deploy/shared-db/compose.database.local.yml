@@ -1,0 +1,3 @@
+services:
+  postgres:
+    command: ["postgres", "-c", "shared_buffers=48MB", "-c", "max_connections=80", "-c", "work_mem=8MB"]

@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+{% macro avatar(size='') -%}
+<span class="person-avatar {{ size }}" aria-hidden="true">{% if personal_avatar_version %}<img src="/profile/avatar?v={{ personal_avatar_version }}" alt="">{% else %}{{ (personal_name or user.username)[0]|upper }}{% endif %}</span>
+{%- endmacro %}
+<div class="profile-page">
+  <header class="profile-heading"><div><span class="eyebrow">属于你的火花守护</span><h1>个人中心</h1><p>让账号像你一样，也让每一次登录更安心。</p></div><a class="profile-return" href="/dashboard">返回工作台 ↗</a></header>
+  {% if error %}<div class="profile-alert is-error" role="alert">{{ error }}</div>{% endif %}
+  {% set notices = {'info-saved':'个人资料已保存', 'avatar-saved':'新头像已保存', 'avatar-removed':'已恢复默认头像', 'email-bound':'邮箱验证成功，已安全绑定', 'unchanged':'账号没有变化，无需修改'} %}
+  {% if notice in notices %}<div class="profile-alert" role="status">{{ notices[notice] }}</div>{% endif %}
+  <section class="profile-identity panel">
+    {{ avatar('is-large') }}
+    <div class="profile-identity-copy"><span class="profile-caption">我的账号</span><h2>{{ personal_name }}</h2><p>@{{ user.username }}<span class="profile-role">{{ '管理员' if is_admin else '普通用户' }}</span></p><small>加入于 {{ user.created_at|shanghai_time }}</small></div>
+    <div class="profile-identity-links"><a href="#info">编辑资料</a><a href="#email" class="profile-email-status {{ 'is-verified' if email_verified else '' }}"><span></span>{{ '邮箱已验证' if email_verified else '绑定邮箱保护账号' }}</a></div>
+  </section>
+  <nav class="profile-shortcuts" aria-label="个人中心分区"><a href="#info">个人资料</a><a href="#account">登录账号</a><a href="#password">修改密码</a><a href="#email">邮箱安全</a></nav>
+  <div class="profile-layout">
+    <section class="profile-card panel" id="info">
+      <header class="profile-card-head"><span class="profile-section-icon" aria-hidden="true">◉</span><div><h2>个人资料</h2><p>一个熟悉的头像，一点属于你的介绍。</p></div><span class="profile-private">仅自己可见</span></header>
+      <div class="profile-avatar-editor" id="avatar">
+        <form action="/profile/avatar" method="post" enctype="multipart/form-data" class="profile-avatar-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+          <span class="person-avatar is-editor" aria-hidden="true"><img data-avatar-preview {% if personal_avatar_version %}src="/profile/avatar?v={{ personal_avatar_version }}"{% else %}hidden{% endif %} alt=""><span data-avatar-initial {% if personal_avatar_version %}hidden{% endif %}>{{ personal_name[0]|upper }}</span></span>
+          <div class="profile-avatar-controls"><label for="profile-avatar">更换头像</label><small>PNG / JPG / WebP，最多 2 MB</small><input id="profile-avatar" type="file" name="avatar" accept="image/png,image/jpeg,image/webp" required><div data-avatar-error class="profile-field-error" role="alert" hidden></div></div>
+          <button type="submit" class="profile-secondary">保存头像</button>
+        </form>
+        {% if personal_avatar_version %}<form action="/profile/avatar/remove" method="post" class="profile-avatar-remove"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit" class="profile-text-button">恢复默认头像</button></form>{% endif %}
+      </div>
+      <form action="/profile/info" method="post" class="profile-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <label for="profile-nickname">昵称 <small>选填</small><input id="profile-nickname" name="nickname" maxlength="32" autocomplete="nickname" placeholder="你希望怎样被称呼" value="{{ profile.nickname or '' if profile else '' }}"></label>
+        <div class="profile-fields-pair"><label for="profile-age">年龄 <small>选填</small><input id="profile-age" name="age" type="number" min="0" max="120" step="1" placeholder="可留空" value="{{ profile.age if profile and profile.age is not none else '' }}"></label><label for="profile-gender">性别 <small>选填</small><select id="profile-gender" name="gender">{% for key,label in [('private','不透露'),('female','女'),('male','男'),('other','其他')] %}<option value="{{ key }}" {% if (profile.gender if profile else 'private') == key %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label></div>
+        <label for="profile-bio">个人简介 <small>选填 · 最多 160 字</small><textarea id="profile-bio" name="bio" rows="3" maxlength="160" placeholder="留下一句属于你的话">{{ profile.bio or '' if profile else '' }}</textarea></label>
+        <footer class="profile-form-footer"><span>资料不会显示给其他用户。</span><button type="submit">保存资料</button></footer>
+      </form>
+    </section>
+    <div class="profile-security-column">
+      <section class="profile-card panel profile-account-card">
+        <details id="account" class="profile-details" {% if error_section == 'account' %}open{% endif %}>
+          <summary><span class="profile-section-icon" aria-hidden="true">@</span><span><strong>登录账号</strong><small>{{ user.username }} · 每 7 天可修改一次</small></span><span class="profile-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="profile-details-body">
+            {% if next_username_change %}<p class="profile-security-note is-cooldown">下次可修改：{{ next_username_change|shanghai_time }}</p>{% else %}<p class="profile-security-note">当前可以修改。原有任务、订单和额度会保留。</p>{% endif %}
+            <form action="/profile/username" method="post" class="profile-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <label for="profile-username">新账号<input id="profile-username" name="username" minlength="3" maxlength="32" autocomplete="username" value="{{ user.username }}" required></label><p class="profile-field-hint">3–32 位字母、数字、下划线或短横线，不能与其他账号重复。</p>
+              <label for="username-password">当前密码<input id="username-password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+              <footer class="profile-form-footer"><span>修改后需重新登录。</span><button type="submit" {% if next_username_change %}disabled{% endif %}>修改账号</button></footer>
+            </form>
+          </div>
+        </details>
+      </section>
+      <section class="profile-card panel profile-password-card">
+        <details id="password" class="profile-details" {% if error_section == 'password' %}open{% endif %}>
+          <summary><span class="profile-section-icon" aria-hidden="true">✦</span><span><strong>登录密码</strong><small>定期更新，让账号更安心</small></span><span class="profile-chevron" aria-hidden="true">⌄</span></summary>
+          <div class="profile-details-body"><form action="/profile/password" method="post" class="profile-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <label for="profile-current-password">当前密码<input id="profile-current-password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required></label>
+            <label for="profile-new-password">新密码<input id="profile-new-password" name="new_password" type="password" autocomplete="new-password" minlength="9" maxlength="128" required></label>
+            <label for="profile-confirm-password">确认新密码<input id="profile-confirm-password" name="new_password_confirmation" type="password" autocomplete="new-password" minlength="9" maxlength="128" required></label>
+            <p class="profile-field-hint">新密码需要 9–128 位，不能与当前密码相同。</p><footer class="profile-form-footer"><span>更新后所有设备需重新登录。</span><button type="submit">更新密码</button></footer>
+          </form></div>
+        </details>
+      </section>
+      <section class="profile-card panel profile-email-card" id="email">
+        <header class="profile-card-head"><span class="profile-section-icon" aria-hidden="true">✉</span><div><h2>邮箱安全</h2><p>{{ '验证旧邮箱与新邮箱，安全换绑。' if email_verified else '验证后可找回密码、接收重要提醒。' }}</p></div></header>
+        {% if email_enabled %}
+          <div class="profile-email-current"><span class="profile-email-dot {{ 'is-verified' if email_verified else '' }}"></span><div><small>{{ '当前已验证邮箱' if email_verified else '当前邮箱' }}</small><strong>{{ email_masked or '尚未绑定' }}</strong></div></div>
+          {% if pending %}
+          <div class="profile-code-area"><div class="profile-code-heading"><strong>验证码已发送</strong><small>10 分钟内有效，连续输错 5 次需重新申请。</small></div><form action="/profile/email/verify/{{ pending.id }}" method="post" class="profile-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            {% if requires_old %}<label for="old-email-code">旧邮箱验证码 <small>{{ email_masked }}</small><input id="old-email-code" name="old_code" inputmode="numeric" autocomplete="one-time-code" minlength="6" maxlength="6" pattern="[0-9]{6}" placeholder="输入旧邮箱收到的验证码" required></label>{% endif %}
+            <label for="new-email-code">{{ '新邮箱' if requires_old else '邮箱' }}验证码 <small>{{ new_email_masked }}</small><input id="new-email-code" name="code" inputmode="numeric" autocomplete="one-time-code" minlength="6" maxlength="6" pattern="[0-9]{6}" placeholder="输入新邮箱收到的验证码" required></label><button type="submit">{{ '确认安全换绑' if requires_old else '完成邮箱绑定' }}</button>
+          </form></div>
+          {% endif %}
+          <details class="profile-email-change" {% if not pending %}open{% endif %}><summary>{{ '重新发送验证码 / 更换地址' if pending else ('更换绑定邮箱' if email_verified else '绑定邮箱') }}</summary><form action="/profile/email/start" method="post" class="profile-form"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><label for="profile-email-address">{{ '新的邮箱地址' if email_verified else '邮箱地址' }}<input id="profile-email-address" name="email" type="email" maxlength="254" autocomplete="email" placeholder="name@example.com" required></label><label for="profile-email-password">当前密码<input id="profile-email-password" name="current_password" type="password" autocomplete="current-password" maxlength="1024" required></label><button type="submit">{{ '向新旧邮箱发送验证码' if email_verified else '发送验证码' }}</button></form></details>
+          <p class="profile-security-note">每 60 秒可发送一次，每小时最多 3 次。验证完成前，原邮箱保持有效。换绑成功后需要重新登录。</p>
+          <div class="profile-email-help"><span>旧邮箱无法使用？请联系管理员核实身份后处理。</span><strong>QQ 718868371</strong><a href="/settings/email">管理邮件提醒 ↗</a></div>
+        {% else %}<p class="profile-security-note">邮箱验证服务暂未开启，请联系管理员。</p>{% endif %}
+      </section>
+    </div>
+  </div>
+  <footer class="profile-page-footer"><span>账号安全操作均需身份核验。</span><form action="/logout" method="post"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button class="profile-text-button" type="submit">退出当前登录 →</button></form></footer>
+</div>
+<script defer src="/static/profile.js?v=20261011-1"></script>
+{% endblock %}

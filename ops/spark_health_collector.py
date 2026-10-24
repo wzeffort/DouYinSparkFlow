@@ -183,7 +183,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--state", type=Path, required=True)
     parser.add_argument("--interface", default="eth0")
+    parser.add_argument("--container-map", type=Path)
     args = parser.parse_args()
+    if args.container_map:
+        mapping = json.loads(args.container_map.read_text(encoding="utf-8"))
+        if not isinstance(mapping, dict) or not all(isinstance(k, str) and isinstance(v, str) for k, v in mapping.items()):
+            parser.error("container map must contain string names")
+        SERVICE_CONTAINERS.clear()
+        SERVICE_CONTAINERS.update(mapping)
     collect(args.output, args.state, args.interface)
 
 

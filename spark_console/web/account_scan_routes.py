@@ -60,6 +60,7 @@ def build_account_scan_router(
     auth: WebAuth,
     cipher: CookieCipher,
     limiter: ScanRequestLimiter | None = None,
+    pii=None,
 ) -> APIRouter:
     router = APIRouter()
     request_limiter = limiter or ScanRequestLimiter()
@@ -102,6 +103,9 @@ def build_account_scan_router(
             except NotFound:
                 return _error(404, "not_found", "未找到扫码会话")
             projection = service.public_status(scan)
+            if pii is not None and projection.get("status") == "succeeded":
+                from spark_console.services.referrals import ReferralService
+                ReferralService(db, pii).review_bindings(user)
         return JSONResponse(projection, headers=NO_STORE)
 
     @router.get("/accounts/scan/{scan_id}/qr")

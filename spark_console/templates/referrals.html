@@ -1,0 +1,60 @@
+{% extends "base.html" %}
+{% block content %}
+<link rel="stylesheet" href="/static/referrals.css?v=20261010-ui1">
+<div class="referral-page">
+<header class="referral-hero">
+  <div><span class="referral-eyebrow">好友邀请计划</span><h1>一起续火，奖励一起拿</h1><p>每邀请一位有效好友，双方都能获得额外使用天数。</p></div>
+  <div class="referral-reward"><strong>+{{ [next_reward, reward_remaining]|min }}<small>天</small></strong><span>下一档总奖励 · 注册 5 天 + 任务阶梯奖励</span></div>
+</header>
+{% if error %}<div class="form-error" role="alert">{{ error }}</div>{% endif %}
+<div class="referral-stats">
+  <div><span>已注册好友</span><strong>{{ registered }}<small>人</small></strong></div>
+  <div><span>已完成两阶段</span><strong>{{ count }}<small>人</small></strong></div>
+  <div><span>累计获得</span><strong>{{ reward_total }}<small>天</small></strong></div>
+</div>
+<div class="referral-columns">
+<section class="panel referral-share">
+  <div class="referral-section-title"><h2>邀请好友</h2><span class="referral-tag">注册先各得 5 天 · 下一档再各加 {{ next_reward - 5 }} 天</span></div>
+  <p class="referral-summary">好友通过邀请码注册并完成邮箱验证，双方先各得 5 天，支持任意有效邮箱，无需绑定抖音。好友绑定抖音并启用任务后，双方按阶梯再得 4、5、6、9、12…天；每位好友的总奖励最高 30 天。</p>
+  {% if is_admin %}
+  <a class="button" href="/admin">前往后台创建邀请码</a>
+  {% elif not referral_email_verified %}
+  <div class="referral-gate"><strong>先验证邮箱</strong><p>使用任意有效邮箱完成验证，即可参与邀请活动。</p><a class="button" href="/settings/email">去验证邮箱 →</a></div>
+  {% elif generated_count >= 3 and douyin_state %}
+  <div class="referral-gate"><strong>{{ '抖音账号已被其他用户使用' if douyin_state == 'douyin_reused' else '还差一步：核验抖音账号' }}</strong><p>{{ '请绑定属于你、未被其他用户用于活动的账号。' if douyin_state == 'douyin_reused' else '你已生成 3 个邀请码，从第 4 个起需扫码核验。' }}</p><a class="button" href="/accounts">{{ '更换抖音账号' if douyin_state == 'douyin_reused' else '去扫码核验' }} →</a></div>
+  {% else %}
+  <form method="post" action="/invitations"><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><button type="submit">生成邀请码</button></form>
+  {% endif %}
+  <p class="referral-hint">一人一码 · 7 天有效 · 每天最多 20 个</p>
+  {% if generated_count < 3 and douyin_state and not is_admin %}<p class="referral-hint">还可生成 {{ 3-generated_count }} 个免抖音核验邀请码；注册阶段无需绑定抖音。</p>{% endif %}
+  {% if incoming %}<p class="referral-incoming">{% if incoming.rewarded_at %}你的受邀奖励已到账：+{{ incoming.friend_days }} 天{% elif incoming.friend_days %}注册奖励已到账：+{{ incoming.friend_days }} 天。绑定抖音并启用任务后，可再领取对应阶梯的任务阶段奖励。{% else %}你已通过好友邀请注册，双方完成邮箱验证后先各得 5 天。{% endif %}</p>{% endif %}
+  <p class="referral-hint">活动奖励累计 {{ reward_total }} / 90 天 · 剩余可领 {{ reward_remaining }} 天</p>
+  <details class="referral-rules"><summary>奖励规则</summary><p>第一步：好友通过邀请码完成注册，双方验证未重复使用的邮箱后，各获得额外 5 天，支持任意有效邮箱，不要求绑定抖音。第二步：好友扫码核验未被其他用户使用的抖音账号，并为该账号启用任务，双方各再领取阶梯奖励。按好友完成第二阶段的顺序，第 1、2、3、4 位分别追加 4、5、6、9 天，此后每位追加奖励再增加 3 天，最高追加 25 天；含注册阶段的单人单次总奖励最高 30 天。</p><p>每位好友的每个阶段只发一次，多位好友的奖励继续累加。奖励加到基础额度，过期则从发奖当天续算；任务数量不变，无限期额度保持无限期。基础额度被撤销或不可用时不发奖。旧规则已经完成的奖励保留，不重复补发，并计入阶梯。换绑或删除账号不会重置记录，各自累计活动奖励最多 90 天（含历史及受邀奖励），最后一次只补足剩余天数。</p></details>
+</section>
+<section class="panel referral-codes"><div class="referral-section-title"><h2>我的邀请码</h2><span class="muted">最近 20 个</span></div>
+{% for item in invitations %}
+<div class="referral-code">
+<div class="referral-section-title"><span class="referral-tag">{{ item.status }}</span><small class="muted">{{ item.expires | shanghai_time }} 到期</small></div>
+{% if item.link %}<label>邀请链接<div class="referral-copy"><input id="invite-link-{{ loop.index }}" readonly value="{{ item.link }}" aria-label="邀请链接"><button type="button" class="quiet" data-copy-invite="invite-link-{{ loop.index }}">复制链接</button></div></label><details><summary>查看邀请码</summary><input readonly value="{{ item.code }}" aria-label="邀请码"></details>{% endif %}
+</div>
+{% else %}<div class="referral-empty"><span class="referral-empty-icon" aria-hidden="true">↗</span><h3>第一位好友，从这里开始</h3><p>生成邀请码后，复制链接分享给好友。</p></div>{% endfor %}
+</section>
+</div>
+<section class="panel referral-history"><div class="referral-section-title"><h2>邀请记录</h2><span class="muted">注册与到账进度</span></div>
+{% for item,outcome,friend_name in history %}
+<article class="item"><div><h3>{{ friend_name or (outcome.friend_name if outcome else '好友') }}{% if not friend_name %}（账号已删除）{% endif %}</h3>
+<p>注册成功 · {{ item.created_at | shanghai_time }}</p>
+{% if not item.rewarded_at and (item.inviter_days or item.friend_days) %}<p><strong>注册阶段已核算</strong> · 你 +{{ item.inviter_days }} 天，好友 +{{ item.friend_days }} 天；启用任务后按阶梯继续领，受个人剩余上限限制。</p>{% endif %}
+{% if item.rewarded_at %}<p><strong>邀请成功，奖励已核算</strong> · 你 {% if item.inviter_days %}+{{ item.inviter_days }} 天{% else %}已达 90 天上限{% endif %}，好友 {% if item.friend_days %}+{{ item.friend_days }} 天{% else %}已达 90 天上限{% endif %}</p><p class="muted">到账时间：{{ item.rewarded_at|shanghai_time }}</p>
+{% elif outcome and outcome.status == 'blocked' %}<p><strong>剩余奖励暂未发放</strong></p><p class="muted">{% if outcome.reason in ['douyin_reused','inviter_douyin_reused'] %}绑定的抖音账号已被其他用户使用，不能重复领取奖励。{% elif outcome.reason in ['qq_reused','email_reused','inviter_qq_reused','inviter_email_reused'] %}相关邮箱已被其他账号用于活动，不能重复领取奖励。{% elif outcome.reason == 'inviter_quota_unavailable' %}你的基础额度不可用，请联系管理员核查。{% elif outcome.reason == 'friend_quota_unavailable' %}好友的基础额度不可用，请好友联系管理员核查。{% elif outcome.reason == 'account_unavailable' %}相关账号已停用或删除，暂不发放奖励。{% else %}未满足邀请奖励条件，请联系管理员核查。{% endif %}</p>
+{% elif outcome and outcome.reason == 'task_pending' %}<p><strong>还差一步：好友启用任务</strong></p><p class="muted">好友绑定的抖音账号下需有一个已启用的有效任务，完成后双方领取对应阶梯的追加奖励。</p>
+{% elif outcome and outcome.reason in ["douyin_pending","inviter_douyin_pending"] %}<p><strong>等待好友绑定抖音并启用任务</strong></p><p class="muted">好友需要在“抖音账号”中扫码完成身份核验，再启用一个任务，领取第二阶段奖励。</p>
+{% else %}<p><strong>已注册，等待邮箱验证</strong></p><p class="muted">双方在“邮箱与通知”中完成邮箱验证，符合条件后自动获得奖励，支持任意有效邮箱。</p>{% endif %}
+</div></article>
+{% else %}<p class="muted">还没有好友完成注册。生成邀请码后，将上方邀请链接分享给好友吧。</p>{% endfor %}
+{% if history_pages>1 %}<nav class="admin-pager" aria-label="我的邀请记录分页">{% if history_page>1 %}<a href="?page={{ history_page-1 }}">上一页</a>{% endif %}<span>第 {{ history_page }} / {{ history_pages }} 页</span>{% if history_page<history_pages %}<a href="?page={{ history_page+1 }}">下一页</a>{% endif %}</nav>{% endif %}
+</section>
+</div>
+<p data-invite-copy-status role="status" aria-live="polite"></p>
+<script defer src="/static/referrals.js?v=20261010"></script>
+{% endblock %}

@@ -81,11 +81,14 @@ class AuthWorker:
     async def run_once(self, stopping: asyncio.Event | None = None) -> bool:
         with session_scope(self.engine) as db:
             scan = ScanSessionService(db).claim_next()
-            if scan is None:
-                return False
-            scan_id = scan.id
-            owner_id = scan.owner_user_id
-            expires_at = scan.expires_at
+            if scan is not None:
+                scan_id = scan.id
+                owner_id = scan.owner_user_id
+                expires_at = scan.expires_at
+
+        if scan is None:
+            from spark_console.contact_sync import run_contact_sync
+            return await run_contact_sync(self.settings, self.engine, stopping=stopping)
 
         def on_qr(png: bytes, qr_crop_png: bytes | None = None) -> None:
             with session_scope(self.engine) as db:
@@ -150,6 +153,8 @@ class AuthWorker:
                     scanned.conversation_names,
                     scanned.contact_identities,
                 )
+                from spark_console.douyin_referral_identity import record_verified_binding
+                record_verified_binding(db, account, scanned.platform_user_id)
                 completed = ScanSessionService(db).complete(scan_id, account.id)
                 if ScanStatus(completed.status) == ScanStatus.EXPIRED:
                     raise LoginTimedOut()

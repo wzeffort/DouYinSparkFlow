@@ -1,0 +1,67 @@
+{% extends "base.html" %}{% block content %}
+<main class="landing">
+  <nav class="landing-top">
+    <span class="brand"><span class="brand-mark">火</span><span>火花守护<small>让每天的问候准时抵达</small></span></span>
+    <span class="landing-top-actions"><a class="landing-login" href="/login">登录</a><a class="landing-cta" href="/register">免费注册</a></span>
+  </nav>
+
+  <section class="landing-hero">
+    <p class="eyebrow">抖音好友关系守护工具</p>
+    <h1>让每一天的问候，<br>准时抵达在乎的人。</h1>
+    <p class="landing-lead">火花守护帮你为好友定时发送问候、自动确认送达。重要的关系，不再靠记忆维持。</p>
+    <div class="landing-actions">
+      <a class="landing-cta big" href="/register">使用邀请码注册</a>
+      <a class="landing-login big" href="/demo/on">先预览控制台</a>
+      <a class="landing-login big" href="/login">我已有账号，直接登录</a>
+    </div>
+    <ul class="landing-trust">
+      <li><span aria-hidden="true">✓</span>邀请制注册</li>
+      <li><span aria-hidden="true">✓</span>Cookie 加密存储</li>
+      <li><span aria-hidden="true">✓</span>逐条送达确认</li>
+    </ul>
+  </section>
+
+  <section class="landing-grid">
+    <article>
+      <span class="landing-icon" aria-hidden="true">✦</span>
+      <h2>定时续火</h2>
+      <p>为每位好友设置专属问候计划：内容、时间、多位收件人自由组合，到点自动发送，凌晨也不遗漏。</p>
+    </article>
+    <article>
+      <span class="landing-icon" aria-hidden="true">✓</span>
+      <h2>真实送达确认</h2>
+      <p>发送后逐条进行页面级确认，「已送达 / 已提交 / 待重试」一目了然，结果不再靠猜。</p>
+    </article>
+    <article>
+      <span class="landing-icon" aria-hidden="true">▦</span>
+      <h2>多账号加密管理</h2>
+      <p>抖音账号统一接入，凭据与 Cookie 全程加密保存、绝不明文展示，账号状态实时校验、失效即提醒。</p>
+    </article>
+    <article>
+      <span class="landing-icon" aria-hidden="true">♡</span>
+      <h2>邀请有礼</h2>
+      <p>生成专属邀请链接分享给朋友，好友注册后双方获得额度奖励，一起守护更多火花。</p>
+    </article>
+  </section>
+
+  <section class="landing-steps">
+    <h2>三步，开始守护</h2>
+    <ol>
+      <li><strong>绑定抖音账号</strong><span>凭据加密保存，随时可移除</span></li>
+      <li><strong>创建续火任务</strong><span>选好友、写下想说的话、定好时间</span></li>
+      <li><strong>坐等送达确认</strong><span>到点自动执行，结果实时可查</span></li>
+    </ol>
+    <a class="landing-cta big" href="/register">立即开始</a>
+  </section>
+
+  <section class="landing-note">
+    <p><span aria-hidden="true">🔒</span> 账号凭据与抖音 Cookie 会加密保存，不会在页面再次展示。</p>
+  </section>
+
+  <footer class="landing-foot">
+    <span>© 火花守护</span>
+    <a href="/login">登录</a>
+    <a href="/register">注册</a>
+  </footer>
+</main>
+{% endblock %}

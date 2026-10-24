@@ -118,14 +118,15 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
         request: Request,
         email: str = Form(default=""),
         csrf_token: str = Form(default=""),
+        current_password: str = Form(default=""),
     ):
-        with session_scope(engine) as db:
+        with auth.mutation_lock, session_scope(engine) as db:
             user, record, _context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
             try:
                 verification = EmailVerificationService(
                     db, passwords, pii, AuditService(db)
-                ).start_binding(user.id, email)
+                ).start_binding(user.id, email, current_password=current_password)
             except (ValidationError, Conflict, ValueError) as exc:
                 return RedirectResponse(
                     "/settings/email?notice=" + ("email-in-use" if isinstance(exc, Conflict) else "invalid-email"), 303
@@ -142,14 +143,16 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
         request_id: str,
         code: str = Form(default=""),
         csrf_token: str = Form(default=""),
+        old_code: str = Form(default=""),
     ):
-        with session_scope(engine) as db:
+        with auth.mutation_lock, session_scope(engine) as db:
             user, record, context = auth.user_context(request, db)
             auth.csrf(record, csrf_token)
+            replacing = user.email_verified_at is not None
             try:
                 EmailVerificationService(
                     db, passwords, pii, AuditService(db)
-                ).verify_binding(user.id, request_id, code)
+                ).verify_binding(user.id, request_id, code, old_code=old_code)
             except (ValidationError, Conflict, ValueError):
                 service = EmailVerificationService(db, passwords, pii, AuditService(db))
                 email = service.email_for_user(user)
@@ -167,6 +170,10 @@ def build_email_router(engine, auth: WebAuth, passwords: PasswordService, pii: P
                     verification_error="验证码无效或已过期",
                     **context,
                 )
+        if replacing:
+            response = RedirectResponse('/login?email_changed=1', 303)
+            response.delete_cookie('spark_session')
+            return response
         return RedirectResponse("/settings/email?notice=verified", 303)
 
     @router.post("/settings/email/preferences")

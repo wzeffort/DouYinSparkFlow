@@ -122,6 +122,19 @@ class InviteService:
             self._ensure_available(invite)
             raise ValidationError("邀请码状态已变化，请重新提交")
         self.audit.write(user_id, "invite.consumed", "invite_code", invite_id)
+        from spark_console.referral_models import ReferralCode, Referral, ReferralOutcome
+        from spark_console.models import User
+        referral_code = self.session.get(ReferralCode, invite_id)
+        if referral_code is not None:
+            if referral_code.inviter_id == user_id:
+                raise ValidationError("不能使用自己的邀请码")
+            self.session.add(Referral(friend_id=user_id, inviter_id=referral_code.inviter_id))
+            inviter = self.session.get(User, referral_code.inviter_id)
+            friend = self.session.get(User, user_id)
+            self.session.add(ReferralOutcome(friend_id=user_id,
+                inviter_name=inviter.username if inviter else "已删除用户",
+                friend_name=friend.username, status="pending", reason="qq_pending"))
+            self.session.flush()
 
     def list_all(self) -> list[InviteCode]:
         return list(

@@ -1,0 +1,13 @@
+/* Transparent artwork stays behind every control and never captures a click. */
+body.auth-surface,body.console-surface{position:relative;isolation:isolate;background:#f3f6fb}
+body.auth-surface::before,body.console-surface::before{content:"";position:fixed;z-index:-1;inset:0;pointer-events:none;background-image:url('/static/spark-atmosphere-20261011.png');background-repeat:no-repeat;background-position:center;background-size:cover}
+body.auth-surface{background:radial-gradient(ellipse at 12% 85%,#f8e8e2 0,transparent 44%),radial-gradient(ellipse at 90% 12%,#e6eff8 0,transparent 48%),#f5f7fc}
+body.auth-surface::before{opacity:.75}
+body.auth-surface .auth-main{background:transparent;min-height:100svh;padding-block:40px}
+body.auth-surface .auth-card{position:relative;background:rgba(255,255,255,.97);border:1px solid rgba(255,255,255,.94);box-shadow:0 24px 72px rgba(46,64,89,.12),0 3px 14px rgba(46,64,89,.05)}
+body.auth-surface .auth-card input{background:#fff}
+body.console-surface::before{left:244px;opacity:.19;background-position:center bottom}
+body.console-surface main{background:transparent}
+body.console-surface .panel{background:rgba(255,255,255,.94)}
+@media(max-width:850px){body.console-surface::before{left:0;background-size:100% auto;opacity:.22}body.auth-surface::before{background-size:100% auto;background-position:center bottom;opacity:.62}body.auth-surface .auth-main{padding:32px 16px;min-height:100svh}body.auth-surface .auth-card{width:min(460px,100%)}body.auth-surface .auth-card .solo{margin-bottom:30px}}
+@media(prefers-reduced-transparency:reduce){body.auth-surface .auth-card,body.console-surface .panel{background:#fff}body.console-surface::before{opacity:.1}}

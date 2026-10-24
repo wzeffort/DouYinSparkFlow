@@ -30,6 +30,14 @@
   let preparedState = null;
   let preloadPromise = null;
   let qrLoadedFor = null;
+  let lastQrLoadAt = 0;
+  const QR_REFRESH_MS = 15000;
+
+  function pollDelay() {
+    // Poll fast while the cloud browser is still booting; once the QR is on
+    // screen the status rarely changes and 1s keeps the page responsive.
+    return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1000 : 500;
+  }
   const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
 
   function clearTimer() {
@@ -50,10 +58,16 @@
     }
   }
 
-  function loadQrOnce(id) {
+  function loadQrOnce(id, force) {
     if (!id) return;
-    qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr?v=${Date.now()}`;
-    const cropUrl = `/accounts/scan/${encodeURIComponent(id)}/qr-crop?v=${Date.now()}`;
+    // The QR payload is a full cloud-page screenshot; re-downloading it on
+    // every status tick wastes bandwidth. Refresh at most every 15s, or
+    // immediately after an interaction that changed the cloud page.
+    const now = Date.now();
+    if (!force && qrLoadedFor === id && now - lastQrLoadAt < QR_REFRESH_MS) return;
+    lastQrLoadAt = now;
+    qrNode.src = `/accounts/scan/${encodeURIComponent(id)}/qr?v=${now}`;
+    const cropUrl = `/accounts/scan/${encodeURIComponent(id)}/qr-crop?v=${now}`;
     if (mobileView) qrCropNode.src = cropUrl;
     qrSaveNode.href = cropUrl;
     qrLoadedFor = id;
@@ -120,7 +134,7 @@
         setBusy(false);
         return;
       }
-      timer = window.setTimeout(pollPrepared, 1000);
+      timer = window.setTimeout(pollPrepared, pollDelay());
     } catch (_error) {
       scanId = null;
       preparedState = null;
@@ -129,8 +143,9 @@
   }
 
   async function preloadScan() {
+    // Background session creation (hover intent): never disable the button or
+    // the user's own click during preload would be swallowed.
     startPending = true;
-    setBusy(true);
     try {
       const response = await fetch("/accounts/scan", {
         method: "POST",
@@ -148,7 +163,7 @@
         loadQrOnce(scanId);
         setQrVisible(true);
       } else if (!TERMINAL.has(state.status)) {
-        timer = window.setTimeout(pollPrepared, 1000);
+        timer = window.setTimeout(pollPrepared, pollDelay());
       }
     } catch (_error) {
       startPending = false;
@@ -186,7 +201,7 @@
       const state = await readJson(response);
       if (closeRequested || cancelPending) return;
       if (!renderState(state)) {
-        timer = window.setTimeout(pollScan, 2000);
+        timer = window.setTimeout(pollScan, pollDelay());
       }
     } catch (error) {
       setBusy(false);
@@ -241,7 +256,7 @@
         return;
       }
       if (!terminal) {
-        timer = window.setTimeout(pollScan, 2000);
+        timer = window.setTimeout(pollScan, pollDelay());
       }
     } catch (error) {
       startPending = false;
@@ -324,7 +339,7 @@
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
         body: new URLSearchParams({csrf_token: csrfToken, x: String(x), y: String(y)}),
       });
-      loadQrOnce(scanId);
+      loadQrOnce(scanId, true);
     } catch (_error) {
       showMessage("云端页面点击未送达，请重试", 0);
     }
@@ -349,7 +364,7 @@
       });
       await readJson(response);
       showMessage("验证码已输入云端，2 秒后将自动验证", 0);
-      loadQrOnce(scanId);
+      loadQrOnce(scanId, true);
     } catch (_error) {
       showMessage("验证码未输入云端，请重新输入", 0);
     } finally {
@@ -358,6 +373,18 @@
   }
 
   startButton.addEventListener("click", startScan);
+  // Warm intent: creating the session on hover/first touch lets the cloud
+  // browser boot while the user is still moving toward the click, so the QR
+  // is often ready the moment the dialog opens.
+  let preloadArmed = false;
+  function armPreload() {
+    if (preloadArmed || startPending) return;
+    if (scanId && preparedState && !TERMINAL.has(preparedState.status)) return;
+    preloadArmed = true;
+    preloadPromise = preloadScan().finally(() => { preloadPromise = null; });
+  }
+  startButton.addEventListener("pointerenter", armPreload);
+  startButton.addEventListener("pointerdown", armPreload);
   closeButton.addEventListener("click", () => requestClose(true));
   cancelButton.addEventListener("click", () => requestClose(false));
   qrNode.addEventListener("click", forwardBrowserClick);

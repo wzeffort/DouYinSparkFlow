@@ -3,13 +3,26 @@
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <title>{{ title }} · 火花守护</title>
-  <link rel="stylesheet" href="/static/app.css?v=20260917-recipient-review">
+  <meta name="description" content="{{ meta_description or '火花守护：抖音好友定时问候与续火工具，定时发送、逐条送达确认、多账号加密管理。' }}">
+  <meta name="theme-color" content="#f36552">
+  <meta property="og:title" content="{{ title }} · 火花守护">
+  <meta property="og:description" content="{{ meta_description or '让每一天的问候，准时抵达在乎的人。' }}">
+  <meta property="og:type" content="website">
+  <link rel="stylesheet" href="/static/app.css?v=20261024-ui2">
+  {% if landing %}<link rel="stylesheet" href="/static/landing.css?v=20261024-1">{% endif %}
+  <link rel="stylesheet" href="/static/renewal.css?v=20261011-offer1">
+  <link rel="stylesheet" href="/static/atmosphere.css?v=20261011-1">
+  <link rel="stylesheet" href="/static/profile.css?v=20261011-1">
+  {% if push_enabled %}<link rel="stylesheet" href="/static/push_settings.css?v=20261009">{% endif %}
 </head>
-<body>
+<body class="{% if nav is defined and not nav %}auth-surface{% else %}console-surface{% endif %}{% if demo_mode %} demo-on{% endif %}">
+{% if demo_mode %}<div class="demo-banner" role="status"><span>👀 预览模式 · 以下均为示例数据</span><span class="demo-banner-actions"><a href="/register">注册解锁全部功能</a><a href="/demo/off">退出预览</a></span></div>{% endif %}
 {% if nav is not defined or nav %}
 {% set current_path = request.url.path %}
+{% set display_person = personal_name or user.username %}
 <header class="mobile-topbar">
   <a class="mobile-brand" href="/dashboard" aria-label="返回今日概览"><span class="brand-mark">火</span><span>火花守护</span></a>
+  <a class="mobile-person-link" href="/profile" aria-label="个人中心，{{ user.username }}"><span class="person-avatar" aria-hidden="true">{% if personal_avatar_version %}<img src="/profile/avatar?v={{ personal_avatar_version }}" alt="">{% else %}{{ display_person[0]|upper }}{% endif %}</span></a>
   <button class="mobile-menu-button" type="button" data-mobile-nav-open aria-controls="app-navigation" aria-expanded="false">
     <svg aria-hidden="true" viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16"/></svg><span>菜单</span>
   </button>
@@ -17,11 +30,12 @@
 
 <aside class="sidebar" id="app-navigation" aria-label="主导航">
   <div class="sidebar-brand-row">
-    <a class="brand" href="/dashboard"><span class="brand-mark">火</span><span>火花守护<small>SPARK CONSOLE</small></span></a>
+    <a class="sidebar-person" href="/profile" aria-label="个人中心，{{ user.username }}"><span class="person-avatar" aria-hidden="true">{% if personal_avatar_version %}<img src="/profile/avatar?v={{ personal_avatar_version }}" alt="">{% else %}{{ display_person[0]|upper }}{% endif %}</span><span class="sidebar-person-copy"><strong>{{ display_person }}</strong><small>@{{ user.username }}</small><em>个人中心 ↗</em></span></a>
     <button class="mobile-drawer-close" type="button" data-mobile-nav-close aria-label="关闭菜单">
       <svg aria-hidden="true" viewBox="0 0 24 24"><path d="m6 6 12 12M18 6 6 18"/></svg>
     </button>
   </div>
+  <div class="sidebar-app-label">火花守护 · SPARK CONSOLE</div>
 
   <nav class="sidebar-nav">
     <span class="nav-section-label">工作台</span>
@@ -38,7 +52,14 @@
       <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 7v5l3 2M21 12a9 9 0 1 1-3-6.7M18 3v4h-4"/></svg><span>执行记录</span>
     </a>
 
+    <a href="/renewal" class="nav-link nav-renewal"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5Zm0 4h18M7 15h4"/></svg><span>我的续卡 · 立即续费</span></a>
     <span class="nav-section-label">通知与安全</span>
+    {% if email_enabled %}<a href="/invitations" class="nav-link{% if current_path == '/invitations' %} active{% endif %}"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M8 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM2 21c0-5 2-8 6-8s6 3 6 8m3-14v10m-5-5h10"/></svg><span>邀请好友</span></a>{% endif %}
+    {% if push_enabled %}
+    <a href="/settings/push" class="nav-link{% if current_path.startswith('/settings/push') %} active{% endif %}"{% if current_path.startswith('/settings/push') %} aria-current="page"{% endif %}>
+      <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 4h16v12H9l-5 4V4Zm4 4h8M8 12h6"/></svg><span>微信与 QQ 通知</span>
+    </a>
+    {% endif %}
     <a href="/messages" class="nav-link{% if current_path.startswith('/messages') %} active{% endif %}"{% if current_path.startswith('/messages') %} aria-current="page"{% endif %}>
       <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9ZM10 21h4"/></svg><span>消息中心</span>{% if unread_notification_count %}<span class="nav-badge" aria-label="{{ unread_notification_count }} 条未读消息">{{ 99 if unread_notification_count > 99 else unread_notification_count }}</span>{% endif %}
     </a>
@@ -47,12 +68,14 @@
       <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 6h18v12H3V6Zm0 1 9 6 9-6"/></svg><span>邮箱与通知</span>
     </a>
     {% endif %}
-    <a href="/change-password" class="nav-link{% if current_path.startswith('/change-password') %} active{% endif %}"{% if current_path.startswith('/change-password') %} aria-current="page"{% endif %}>
-      <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M6 10V7a6 6 0 0 1 12 0v3M5 10h14v11H5V10Zm7 4v3"/></svg><span>修改密码</span>
+    <a href="/profile" class="nav-link{% if current_path.startswith('/profile') %} active{% endif %}"{% if current_path.startswith('/profile') %} aria-current="page"{% endif %}>
+      <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8ZM4 21c0-5 3-8 8-8s8 3 8 8"/></svg><span>个人中心</span>
     </a>
 
     {% if is_admin %}
     <span class="nav-section-label">系统管理</span>
+    <a href="/admin/renewals" class="nav-link"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M3 5h18v14H3V5Zm0 4h18M7 15h4"/></svg><span>续卡订单与收款码</span></a>
+    {% if email_enabled %}<a href="/admin/referrals" class="nav-link{% if current_path == '/admin/referrals' %} active{% endif %}"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M4 3h16v18H4V3Zm4 5h8M8 12h8M8 16h5"/></svg><span>邀请奖励日志</span></a>{% endif %}
     <a href="/admin" class="nav-link{% if current_path == '/admin' or current_path.startswith('/admin/tasks') or current_path.startswith('/admin/accounts') %} active{% endif %}"{% if current_path == '/admin' %} aria-current="page"{% endif %}>
       <svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3 4 7v5c0 5 3.5 8 8 9 4.5-1 8-4 8-9V7l-8-4Zm0 5v8M8 12h8"/></svg><span>管理后台</span>
     </a>
@@ -67,15 +90,17 @@
 
   <form class="sidebar-logout" action="/logout" method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
-    <button class="nav-logout" type="submit"><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10"/></svg><span>退出登录</span><small>{{ user.username }}</small></button>
+    <button class="nav-logout" type="submit"><span><svg class="nav-icon" aria-hidden="true" viewBox="0 0 24 24"><path d="M10 4H4v16h6M14 8l4 4-4 4M8 12h10"/></svg>退出登录</span><small aria-hidden="true">↗</small></button>
   </form>
 </aside>
 <button class="mobile-nav-scrim" type="button" data-mobile-nav-scrim aria-label="关闭菜单" tabindex="-1"></button>
 {% endif %}
 
+{% if (nav is not defined or nav) and not is_admin %}<a class="renewal-global-button" href="/renewal" aria-label="我的续卡，购买或续费任务名额">我的续卡 ↗</a>{% endif %}
 <main class="{% if nav is defined and not nav %}auth-main{% endif %}">
   {% block content %}{% endblock %}
 </main>
-<script defer src="/static/security-ui.js?v=20260906-operations2"></script>
+<script defer src="/static/security-ui.js?v=20261024-login1"></script>
+{% if demo_mode %}<script defer src="/static/demo_gate.js?v=20261024-1"></script>{% endif %}
 {% if nav is not defined or nav %}<script defer src="/static/navigation.js?v=20260902-1"></script>{% endif %}
 </body></html>

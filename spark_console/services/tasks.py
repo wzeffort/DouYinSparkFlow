@@ -96,10 +96,19 @@ def schedule_recent_safe_failures(
 
 
 class TaskService:
-    def __init__(self, session: Session, accounts: AccountService, audit: AuditService):
+    def __init__(self, session: Session, accounts: AccountService, audit: AuditService, *, pii=None):
         self.session = session
         self.accounts = accounts
         self.audit = audit
+        self.pii = pii
+
+    def _reward_activation(self, task):
+        if task.enabled and self.pii is not None:
+            self.session.flush()
+            from spark_console.services.referrals import ReferralService
+            owner = self.session.get(User, task.owner_user_id)
+            if owner:
+                ReferralService(self.session, self.pii).verified(owner)
 
     def recipients_for(self, task: SparkTask) -> list[dict]:
         rows = self.session.scalars(select(SparkTaskRecipient).where(
@@ -263,6 +272,7 @@ class TaskService:
         if recipients is not None:
             self._save_recipients(task, recipients)
             capacity.bind_task(task)
+        self._reward_activation(task)
         return task
 
     def set_enabled_owned(self, owner_id: str, task_id: str, enabled: bool) -> SparkTask:
@@ -291,6 +301,7 @@ class TaskService:
             task.next_run_at = compute_next_run(task.send_time, datetime.now(timezone.utc))
         task.enabled = enabled
         self.audit.write(actor_id, "task.enabled" if enabled else "task.disabled", "spark_task", task.id)
+        self._reward_activation(task)
         return task
 
     @atomic_task_write
@@ -378,6 +389,7 @@ class TaskService:
             self._save_recipients(task, recipients)
             if task.enabled:
                 TaskCapacityService(self.session, self.audit).bind_task(task)
+        self._reward_activation(task)
         return task
 
     def delete_owned(self, owner_id: str, task_id: str) -> None:

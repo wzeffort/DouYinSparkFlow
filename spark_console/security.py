@@ -10,13 +10,22 @@ from argon2.exceptions import InvalidHashError, VerifyMismatchError
 from spark_console.models import WebSession
 
 
+# A fixed, valid argon2id hash (same parameters as PasswordService uses) of an
+# unguessable random value. Verifying candidate passwords against it when the
+# account is unknown keeps login response times from revealing user existence.
+DUMMY_PASSWORD_HASH = (
+    "$argon2id$v=19$m=65536,t=3,p=4$"
+    "I56DwRRNtnyQh618Se7aaw$9DbLzKx9lRM142/perEzJeiqCDzcMyV323dp0uCy6Qw"
+)
+
+
 class PasswordService:
     def __init__(self) -> None:
         self._hasher = PasswordHasher()
 
     def hash(self, password: str) -> str:
-        if len(password) < 12:
-            raise ValueError("password must contain at least 12 characters")
+        if len(password) < 9:
+            raise ValueError("password must contain at least 9 characters")
         return self._hasher.hash(password)
 
     def verify(self, encoded: str, password: str) -> bool:

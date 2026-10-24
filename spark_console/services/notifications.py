@@ -4,14 +4,20 @@ import base64
 import json
 import secrets
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from cryptography.exceptions import InvalidTag
+from sqlalchemy import literal, select
+from sqlalchemy.orm import Session, aliased
 
 from spark_console.models import (
     AppSetting,
+    AuditEvent,
     EmailActionToken,
     NotificationEvent,
+    SparkTask,
+    TaskQuotaGrant,
+    User,
     UserNotification,
     utc_now,
     uuid_string,
@@ -21,10 +27,13 @@ from spark_console.services.audits import AuditService
 
 
 TEMPLATE_FIELDS = {
+    "quota_gift": {"username", "days", "slots", "expires_at", "action_path"},
+    "renewal_submitted": {"username", "order_id", "plan", "amount", "channel", "action_path"},
     "verify_email": {"code", "username"},
     "reset_password": {"code", "username"},
     "douyin_expired": {"account_name", "action_path"},
     "task_failure": {"target_name", "reason", "action_path"},
+    "quota_migrated": {"target_name", "card_label", "expires_at", "action_path"},
 }
 
 
@@ -133,6 +142,55 @@ class NotificationService:
         self.session.add(event)
         self.session.flush()
         return event
+
+    def enqueue_quota_migration_emails(self, now: datetime | None = None) -> int:
+        dedupe = literal("quota-migrated:") + AuditEvent.id
+        queued = select(NotificationEvent.id).where(NotificationEvent.dedupe_key == dedupe).exists()
+        failure = aliased(AuditEvent)
+        failed = select(failure.id).where(
+            failure.action == "quota.migration_email_failed",
+            failure.resource_id == AuditEvent.id,
+        ).exists()
+        migrations = self.session.execute(
+            select(AuditEvent, SparkTask, User)
+            .join(SparkTask, SparkTask.id == AuditEvent.resource_id)
+            .join(User, User.id == SparkTask.owner_user_id)
+            .where(AuditEvent.action == "task.quota_auto_migrated", ~queued, ~failed,
+                   User.status == "active", User.email_verified_at.is_not(None),
+                   User.email_ciphertext.is_not(None), User.email_nonce.is_not(None))
+            .order_by(AuditEvent.created_at, AuditEvent.id).limit(100)
+        ).all()
+        count = 0
+        for migration, task, user in migrations:
+            try:
+                detail = json.loads(migration.detail)
+                if not isinstance(detail, dict):
+                    raise ValueError("invalid migration detail")
+                grant_id = detail.get("new_grant_id")
+                if not isinstance(grant_id, str) or not 1 <= len(grant_id) <= 36:
+                    raise ValueError("invalid migration grant")
+                grant = self.session.get(TaskQuotaGrant, grant_id)
+                expiry = detail.get("expires_at")
+                expiry_text = (
+                    _aware(datetime.fromisoformat(expiry)).astimezone(ZoneInfo("Asia/Shanghai"))
+                    .strftime("%Y-%m-%d %H:%M:%S（上海时间）") if expiry else "长期有效"
+                )
+                recipient = self.pii.decrypt_email(
+                    user.email_ciphertext, user.email_nonce, aad=f"user:{user.id}".encode()
+                )
+            except (ValueError, TypeError, KeyError, InvalidTag):
+                self.audit.write(None, "quota.migration_email_failed", "quota_migration",
+                                 migration.id, detail="invalid_migration_or_email_data")
+                continue
+            self.enqueue_template(
+                user.id, "quota_migrated", recipient, "quota_migrated",
+                {"target_name": task.target_name,
+                 "card_label": grant.label if grant else "新的有效额度",
+                 "expires_at": expiry_text, "action_path": "/tasks"},
+                f"quota-migrated:{migration.id}", now=now,
+            )
+            count += 1
+        return count
 
     def payload_for(self, event: NotificationEvent) -> dict[str, str]:
         envelope = json.loads(event.payload_json)
