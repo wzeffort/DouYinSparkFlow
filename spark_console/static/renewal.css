@@ -14,3 +14,54 @@
 @keyframes renewal-pulse{0%,100%{box-shadow:0 12px 30px rgba(243,101,82,.35)}50%{box-shadow:0 12px 34px rgba(243,101,82,.62),0 0 0 8px rgba(243,101,82,.10)}}
 @media(prefers-reduced-motion:reduce){.renewal-confirm-button{animation:none}}
 @media(max-width:640px){.renewal-confirm-steps{flex-direction:column;align-items:center;gap:10px}.renewal-confirm-steps li:not(:last-child)::after{content:"↓";margin:8px 0 0;transform:translateX(14px)}}
+
+/* Checkout page redesign: centered payment card, mobile sticky confirm. */
+.renewal-pay-wrap{max-width:620px;margin:0 auto;display:grid;gap:16px}
+.renewal-head{margin-bottom:20px}
+.renewal-order-id{margin:8px 0 0;color:var(--muted);font-size:13px;letter-spacing:.02em}
+.renewal-pay{padding:26px 24px 24px;text-align:center}
+.renewal-pay-top{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}
+.renewal-pay-meta{color:var(--muted);font-size:13px;font-weight:600}
+.renewal-pay-amount{margin:10px 0 16px;font-size:50px;font-weight:800;line-height:1.1;color:#1e293b;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.renewal-pay-amount small{font-size:24px;margin-right:2px;color:#64748b}
+.renewal-status-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:750;background:#fff4e0;color:#9a6208}
+.renewal-status-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.renewal-status-pill.status-pending{background:#fff4e0;color:#9a6208}
+.renewal-status-pill.status-submitted,.renewal-status-pill.status-fulfilling{background:#e8f1fe;color:#2b6cb0}
+.renewal-status-pill.status-approved{background:#e5f5ef;color:#168565}
+.renewal-status-pill.status-cancelled,.renewal-status-pill.status-rejected{background:#f0f1f5;color:#737b8d}
+.renewal-pay-qr{display:grid;justify-items:center;gap:6px}
+.renewal-qr-frame{position:relative;padding:14px;border-radius:18px;background:#fff;box-shadow:0 10px 30px rgba(31,38,61,.08)}
+.renewal-qr-frame img{display:block;width:242px;max-width:100%;height:auto;border-radius:10px}
+.renewal-qr-frame::before{content:"";position:absolute;inset:0;border-radius:18px;background:
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/3px 26px no-repeat;pointer-events:none}
+.renewal-qr-hint{margin:12px 0 2px;color:#5b6b82;font-size:14px}
+.renewal-qr-large{color:var(--ember-dark);font-size:13px;font-weight:700;text-decoration:underline;text-underline-offset:3px}
+.renewal-qr-final{margin:8px 0 0;font-size:17px;font-weight:750;color:#243247}
+.renewal-pay-error{text-align:left;border-left:4px solid var(--ember)}
+.renewal-go-tasks{min-height:48px;font-size:15px}
+.renewal-support{margin:0;display:flex;gap:26px;align-items:center;border:1px solid #f8c9bd;border-radius:16px;background:#fff7f3;padding:18px 22px}
+.renewal-faq{border:1px solid var(--mist);border-radius:16px;background:#fbfcfe;padding:16px 20px;color:#5b6b82;font-size:13px}
+.renewal-faq summary{cursor:pointer;font-weight:750;color:#3d4a5f}
+.renewal-faq p{line-height:1.85;margin:12px 0 0}
+.renewal-cancel-form{margin-top:14px}
+.renewal-sticky-cta{display:none}
+@media(max-width:640px){
+  .renewal-pay{padding:22px 16px 20px}
+  .renewal-pay-amount{font-size:42px}
+  .renewal-qr-frame img{width:210px}
+  .renewal-confirm-steps{flex-direction:column;align-items:center;gap:10px}
+  .renewal-confirm-steps li:not(:last-child)::after{content:"↓";margin:8px 0 0;transform:translateX(14px)}
+  .renewal-support{flex-direction:column;align-items:flex-start;gap:10px;padding:16px}
+  .renewal-sticky-cta{position:fixed;left:0;right:0;bottom:0;z-index:45;display:flex;align-items:center;gap:12px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(255,255,255,.97);box-shadow:0 -10px 30px rgba(24,32,51,.14);backdrop-filter:blur(8px)}
+  .renewal-sticky-cta span{flex:1;font-size:13px;font-weight:700;color:#3d4a5f}
+  .renewal-sticky-cta button{flex:1.5;min-height:46px;padding:12px 16px;font-size:15px;border-radius:12px}
+  body:has(.renewal-sticky-cta) main{padding-bottom:120px}
+}
