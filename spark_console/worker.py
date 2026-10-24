@@ -262,7 +262,8 @@ class Worker:
                 template = row.message_template
                 scheduled = db.get(TaskRun, run_id).scheduled_for
             try:
-                text, source = await asyncio.wait_for(asyncio.to_thread(render_content, template, scheduled), 6)
+                text, source = await asyncio.wait_for(asyncio.to_thread(
+                    render_content, template, scheduled, cache_dir=self.settings.data_dir), 6)
             except Exception:
                 text, source = parse_content(template).get('fallback', '今日火花，祝你今天开心！'), '一言不可用，已使用备用文案'
             with session_scope(self.engine) as db:
@@ -307,7 +308,12 @@ class Worker:
             status, summary, retryable = batch.summary(run_id)
             run, task = db.get(TaskRun, run_id), db.get(SparkTask, task_id)
             if retryable and task and task.enabled and not stopped_for_auth and not denied:
-                scheduled = self._schedule_retry(db, task, run, datetime.now(timezone.utc), "batch_retry")
+                rows_preview = batch.rows(run_id)
+                unsent = [r for r in rows_preview if r.status not in ("success", "submitted")]
+                selection_only = bool(unsent) and all(
+                    r.stage == "selecting_target" for r in unsent
+                )
+                scheduled = self._schedule_retry(db, task, run, datetime.now(timezone.utc), "batch_retry", long_spacing=selection_only)
                 if scheduled is not None:
                     batch.remember_retry(task_id, run_id, task.next_run_at)
                     scheduled.error_summary = summary + "；仅重试明确未发送的好友"
@@ -331,7 +337,95 @@ class Worker:
             if status in {"failed", "partial"}:
                 self._record_task_failure_incident(db, task, finished, datetime.now(timezone.utc),
                                                   target_label="、".join(missing)[:120] if missing else None)
+                self._pause_stuck_selection_recipients(db, task, datetime.now(timezone.utc))
             return finished
+
+    def _pause_stuck_selection_recipients(self, db, task, now: datetime) -> None:
+        # A friend whose selection fails three consecutive nights keeps
+        # flipping a nightly coin; remove it and tell the owner to rename and
+        # re-add instead of retrying forever.
+        from zoneinfo import ZoneInfo
+        from spark_console.models import (
+            NotificationPreference,
+            SparkTaskRecipient,
+            TaskRunRecipient,
+            User,
+        )
+        from spark_console.services.notifications import NotificationService
+        zone = ZoneInfo("Asia/Shanghai")
+        rows = db.execute(
+            select(
+                TaskRunRecipient.position,
+                TaskRunRecipient.status,
+                TaskRunRecipient.stage,
+                TaskRun.scheduled_for,
+            )
+            .join(TaskRun, TaskRun.id == TaskRunRecipient.run_id)
+            .where(
+                TaskRun.task_id == task.id,
+                TaskRun.scheduled_for >= now - timedelta(days=4),
+            )
+            .order_by(TaskRun.scheduled_for.asc())
+        ).all()
+        by_position: dict = {}
+        for position, row_status, row_stage, scheduled_for in rows:
+            day = scheduled_for.astimezone(zone).date()
+            by_position.setdefault(position, {})[day] = (row_status, row_stage)
+        today = now.astimezone(zone).date()
+        for position in sorted(by_position):
+            days = by_position[position]
+            stuck = True
+            for back in range(3):
+                outcome = days.get(today - timedelta(days=back))
+                if outcome is None:
+                    stuck = False
+                    break
+                status_value, stage_value = outcome
+                if status_value in ("success", "submitted") or stage_value != "selecting_target":
+                    stuck = False
+                    break
+            if not stuck:
+                continue
+            recipient = db.get(
+                SparkTaskRecipient, {"task_id": task.id, "position": position}
+            )
+            name = recipient.target_name if recipient is not None else ""
+            if recipient is not None:
+                db.delete(recipient)
+            AuditService(db).write(
+                task.owner_user_id,
+                "task.recipient.auto_paused",
+                "spark_task",
+                task.id,
+            )
+            user = db.get(User, task.owner_user_id)
+            preference = db.get(NotificationPreference, task.owner_user_id)
+            if (
+                user is None
+                or preference is None
+                or not user.email_verified_at
+                or not user.email_ciphertext
+                or not user.email_nonce
+            ):
+                continue
+            email = self.pii.decrypt_email(
+                user.email_ciphertext,
+                user.email_nonce,
+                aad=f"user:{user.id}".encode(),
+            )
+            NotificationService(db, self.pii, AuditService(db)).enqueue_template(
+                task.owner_user_id,
+                "task_recipient_paused",
+                email,
+                "task_failure",
+                {
+                    "target_name": name or "某位好友",
+                    "reason": "该好友已连续 3 晚无法在抖音中唯一选中（昵称搜索命中多个结果或无法匹配），已自动从任务中移除；请给这位好友设置独特的备注名后，重新添加到任务。",
+                    "action_path": f"/tasks/{task.id}/edit",
+                },
+                f"task-recipient-paused:{task.id}:{position}:{today.isoformat()}",
+                now=now,
+            )
 
     def _record_auth_incident(
         self, db, account: DouyinAccount, reason_code: str, now: datetime
@@ -451,16 +545,26 @@ class Worker:
             now=now,
         )
 
-    def _schedule_retry(self, db, task, run, now, stage):
+    def _schedule_retry(self, db, task, run, now, stage, long_spacing=False):
+        if long_spacing:
+            # Selection-stage failures repeat identically all night: the
+            # search page state is sticky within minutes. One later same-day
+            # retry gets a fresh window instead of burning attempts 1m/5m
+            # apart; the 12h dedupe window caps it at one per night.
+            delays = (timedelta(minutes=25),)
+            window = timedelta(hours=12)
+        else:
+            delays = self.RETRY_DELAYS
+            window = timedelta(minutes=15)
         retry_codes = tuple(
             f"retry_scheduled_{int(delay.total_seconds() // 60)}m"
-            for delay in self.RETRY_DELAYS
+            for delay in delays
         )
         used_codes = set(
             db.scalars(
                 select(TaskRun.error_code).where(
                     TaskRun.task_id == task.id,
-                    TaskRun.started_at >= now - timedelta(minutes=15),
+                    TaskRun.started_at >= now - window,
                     TaskRun.error_code.in_(retry_codes),
                 )
             ).all()
