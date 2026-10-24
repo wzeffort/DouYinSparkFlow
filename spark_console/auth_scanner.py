@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import re
 import inspect
 import logging
 import os
@@ -41,6 +42,12 @@ AUTHENTICATED_SELECTOR = (
 CHAT_AUTHENTICATED_SELECTOR = ".conversationConversationItemwrapper"
 AUTHENTICATED_PATH_PREFIX = "/creator-micro/"
 QRCONNECT_PATH = "/passport/web/check_qrconnect/"
+def _is_placeholder_name(value: str | None) -> bool:
+    # Passport name/screen_name default to "user<id>" for accounts that never
+    # set them; that is not the Douyin display nickname.
+    return bool(value) and re.fullmatch("user[0-9]+", value) is not None
+
+
 DISPLAY_NAME_SELECTOR = (
     'xpath=//*[contains(@id,"garfish_app_for_douyin_creator_pc_home")]'
     "/div/div[2]/div/div[2]/div[1]/div[2]/div[1]/div[1]/div[1]"
@@ -289,18 +296,31 @@ class DouyinQrScanner:
             profile_name, profile_id = await self._await_stage(
                 self._optional_account_profile(prepared.context, deadline), cancelled, deadline
             )
-            display_name = profile_name or await self._await_stage(
+            candidate = profile_name or await self._await_stage(
                 self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
                 cancelled,
                 deadline,
-            ) or "抖音账号"
+            )
+            if _is_placeholder_name(candidate):
+                candidate = None
+            storage_state = await self._await_stage(
+                prepared.context.storage_state(), cancelled, deadline
+            )
+            if not candidate:
+                from spark_console.services.accounts import _douyin_display_name
+                stored_lookup = await self._await_stage(
+                    asyncio.get_running_loop().run_in_executor(
+                        None, _douyin_display_name, storage_state
+                    ),
+                    cancelled,
+                    deadline,
+                )
+                candidate = stored_lookup
+            display_name = candidate or "抖音账号"
             unique_id = profile_id or await self._await_stage(
                 self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
                 cancelled,
                 deadline,
-            )
-            storage_state = await self._await_stage(
-                prepared.context.storage_state(), cancelled, deadline
             )
             conversation_names = await self._await_stage(
                 self._visible_conversation_names(prepared.page), cancelled, deadline
