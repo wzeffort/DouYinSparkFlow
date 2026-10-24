@@ -6,6 +6,7 @@
     <p>使用抖音 App 扫码绑定，账号信息会在手机确认后自动保存。</p>
   </div>
 </header>
+{% if request.query_params.get('name_refresh') == '1' %}<div class="email-toast email-toast-success" role="status">昵称已更新。</div>{% elif request.query_params.get('name_refresh') == '0' %}<div class="email-toast" role="status" style="border-color:#f0bbb4;background:#fff5f3;color:#a52f24">暂时无法获取昵称：稍后再试，或登录失效时重新扫码绑定。</div>{% endif %}
 
 <div class="split accounts-layout">
   <section class="panel account-list">
@@ -25,6 +26,10 @@
             <label class="sr-only" for="account-name-{{ account.id }}">新账号备注</label>
             <input id="account-name-{{ account.id }}" name="display_name" value="{{ account.display_name }}" maxlength="64" required>
             <button class="quiet" type="submit">修改备注</button>
+          </form>
+          <form method="post" action="/accounts/{{ account.id }}/refresh-name" data-once>
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+            <button class="quiet" type="submit" title="从抖音重新读取该账号的昵称">重新获取昵称</button>
           </form>
           <form method="post" action="/accounts/{{ account.id }}/delete">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}">

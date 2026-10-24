@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 
+import httpx
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -19,6 +20,57 @@ from spark_console.models import (
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
 from spark_console.services.contacts import merge_contacts
+
+
+ACCOUNT_INFO_URL = "https://www.douyin.com/passport/account/info/v2/?aid=6383"
+
+
+def _douyin_display_name(storage_state: dict) -> str | None:
+    """Read the bound account's own nickname with its stored cookies.
+
+    Accepts the current Douyin payload shape (no data.error_code field) and
+    the legacy one; anything else, including unauthenticated responses, is
+    rejected via the user_id guard.
+    """
+    cookies = [
+        cookie
+        for cookie in (storage_state or {}).get("cookies", [])
+        if isinstance(cookie, dict)
+        and cookie.get("name")
+        and isinstance(cookie.get("value"), str)
+        and "douyin" in str(cookie.get("domain", "")).lower()
+    ]
+    if not cookies:
+        return None
+    header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    try:
+        response = httpx.get(
+            ACCOUNT_INFO_URL,
+            headers={"cookie": header},
+            timeout=8,
+            follow_redirects=False,
+        )
+        if response.status_code != 200:
+            return None
+        body = response.json()
+    except Exception:
+        return None
+    data = body.get("data") if isinstance(body, dict) else None
+    if not (
+        isinstance(data, dict)
+        and body.get("message") == "success"
+        and data.get("error_code") in (0, None)
+        and data.get("user_id")
+    ):
+        return None
+
+    def clean(value):
+        if not isinstance(value, str):
+            return None
+        value = value.strip()
+        return value if 1 <= len(value) <= 64 and all(ord(c) >= 32 for c in value) else None
+
+    return clean(data.get("nickname")) or clean(data.get("name"))
 
 
 class AccountService:
@@ -149,6 +201,26 @@ class AccountService:
         account.display_name = self._validated_display_name(display_name)
         self.session.flush()
         self.audit.write(owner_id, "account.renamed", "douyin_account", account.id)
+        return account
+
+    def refresh_display_name_owned(self, owner_id: str, account_id: str) -> DouyinAccount:
+        account = self.get_owned(owner_id, account_id)
+        raw = self.cipher.decrypt(account.encrypted_cookies, account.cookie_nonce)
+        try:
+            envelope = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise ValidationError("账号凭据无效，请重新绑定") from error
+        storage_state = (
+            envelope.get("storage_state")
+            if isinstance(envelope, dict) and envelope.get("version") == 2
+            else envelope
+        )
+        name = _douyin_display_name(storage_state if isinstance(storage_state, dict) else {})
+        if name is None:
+            raise ValidationError("暂时无法获取昵称，请稍后重试；登录失效时请重新扫码绑定")
+        account.display_name = self._validated_display_name(name)
+        self.session.flush()
+        self.audit.write(owner_id, "account.name_refreshed", "douyin_account", account.id)
         return account
 
     def get_owned(self, owner_id: str, account_id: str) -> DouyinAccount:
