@@ -27,6 +27,7 @@ from spark_console.services.audits import AuditService
 
 
 TEMPLATE_FIELDS = {
+    "quota_gift": {"username", "days", "slots", "expires_at", "action_path"},
     "renewal_submitted": {"username", "order_id", "plan", "amount", "channel", "action_path"},
     "verify_email": {"code", "username"},
     "reset_password": {"code", "username"},

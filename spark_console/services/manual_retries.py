@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from sqlalchemy import select
 
-from spark_console.models import DouyinAccount, ManualRunRetry, SparkTask, SparkTaskRecipient, TaskBatchRetry, TaskRun, User
+from spark_console.models import DouyinAccount, ManualRunRetry, SparkTask, SparkTaskRecipient, TaskBatchRetry, TaskRun, TaskRunDiagnostic, User
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
 from spark_console.services.batch_execution import BatchRunService
@@ -43,6 +43,9 @@ class ManualRetryService:
         task = self.db.get(SparkTask, run.task_id)
         owner = self.db.get(User, task.owner_user_id) if task else None
         rows = BatchRunService(self.db).rows(run.id)
+        missed = run.status == 'skipped' and (run.stage, run.error_code) in {
+            ('late', 'missed_window'), ('missed_startup', 'worker_was_offline')}
+        diagnostic = self.db.get(TaskRunDiagnostic, run.id)
         positions = [r.position for r in rows if (r.status == 'failed' and r.stage in SAFE_STAGES and r.error_code in SAFE_CODES)
             or (r.status == 'pending' and r.stage in {'queued','not_started'})]
         reason = ''
@@ -55,8 +58,10 @@ class ManualRetryService:
             reason = '已有更新的执行结果'
         elif self.db.get(ManualRunRetry, run.id):
             reason = '这条记录已经安排过重跑'
-        elif run.status not in {'failed','partial'}:
+        elif run.status not in {'failed','partial'} and not missed:
             reason = '不是失败或部分完成记录'
+        elif missed and (rows or (diagnostic and diagnostic.send_started)):
+            reason = '跳过记录存在发送检查点，需人工核实'
         elif not task or not task.enabled or not owner or owner.status != 'active':
             reason = '任务或用户已暂停'
         elif not account or account.owner_user_id != task.owner_user_id or account.validation_state != 'valid':
@@ -69,7 +74,7 @@ class ManualRetryService:
             reason = '今天已有待执行计划'
         elif rows and not positions:
             reason = '没有明确未发送的好友'
-        elif not rows and not (run.error_code in SAFE_CODES and run.stage in SAFE_STAGES):
+        elif not rows and not (missed or (run.error_code in SAFE_CODES and run.stage in SAFE_STAGES)):
             reason = '无法确认未发送，需人工核实'
         if not reason and rows:
             current = list(self.db.scalars(select(SparkTaskRecipient).where(SparkTaskRecipient.task_id == task.id).order_by(SparkTaskRecipient.position)))
@@ -84,7 +89,7 @@ class ManualRetryService:
     def preview(self, actor_id):
         self.require_admin(actor_id)
         runs = self.db.scalars(select(TaskRun).where(TaskRun.scheduled_for >= self.start,
-            TaskRun.scheduled_for < self.end, TaskRun.status.in_(['failed','partial']))
+            TaskRun.scheduled_for < self.end, TaskRun.status.in_(['failed','partial','skipped']))
             .order_by(TaskRun.scheduled_for.desc(), TaskRun.id.desc())).all()
         seen, entries = set(), []
         for run in runs:

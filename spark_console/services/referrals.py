@@ -1,7 +1,6 @@
-import re
 from datetime import timedelta, timezone
 from sqlalchemy import func, select, update
-from spark_console.models import AppSetting, DouyinAccount, InviteCode, TaskQuotaGrant, User, utc_now
+from spark_console.models import AppSetting, DouyinAccount, InviteCode, SparkTask, TaskQuotaGrant, User, utc_now
 from spark_console.referral_models import (
     AccountReferralIdentity, VerifiedDouyin,
     Referral, ReferralCode, ReferralLock, ReferralOutcome, ReferralReceipt, VerifiedQQ,
@@ -29,21 +28,21 @@ class ReferralService:
 
     def seed_existing(self):
         self.lock()
-        if self.db.get(AppSetting, "referral_qq_seeded_v1"):
+        if self.db.get(AppSetting, "referral_email_seeded_v2"):
             return
-        for user in self.db.scalars(select(User).where(User.email_verified_at.is_not(None))):
-            key = self.qq_hash(user)
+        for user in self.db.scalars(select(User).where(User.email_verified_at.is_not(None)).order_by(User.created_at, User.id)):
+            key = self.verified_email_hash(user)
             if key and self.db.get(VerifiedQQ, key) is None:
                 self.db.add(VerifiedQQ(email_hash=key, first_user_id=user.id))
-        self.db.add(AppSetting(key="referral_qq_seeded_v1", value="true"))
+        self.db.add(AppSetting(key="referral_email_seeded_v2", value="true"))
 
-    def qq_hash(self, user):
-        if not user.email_verified_at or not user.email_ciphertext or not self.pii:
+    def verified_email_hash(self, user):
+        if not user.email_verified_at or not user.email_ciphertext or not user.email_nonce or not self.pii:
             return None
         email = self.pii.decrypt_email(user.email_ciphertext, user.email_nonce,
                                       aad=f"user:{user.id}".encode()).strip().lower()
-        if not re.fullmatch(r"[1-9][0-9]{4,11}@qq\.com", email):
-            return None
+        # Keep the existing durable identity ledger, including earlier QQ rewards.
+        # Verification admits all mail providers; deleting/rebinding never clears it.
         return self.pii.lookup_hash(email)
 
     def douyin_state(self, user_id):
@@ -80,9 +79,9 @@ class ReferralService:
             if outcome is not None and not referral.rewarded_at:
                 outcome.status, outcome.reason, outcome.checked_at = status, reason, current
 
-        key = self.qq_hash(user)
+        key = self.verified_email_hash(user)
         if not key:
-            state("pending", "qq_pending")
+            state("pending", "email_pending")
             return
         identity = self.db.get(VerifiedQQ, key)
         if identity is None:
@@ -92,7 +91,7 @@ class ReferralService:
         if referral and referral.rewarded_at:
             return
         if identity.first_user_id != user.id:
-            state("blocked", "qq_reused")
+            state("blocked", "email_reused")
             return
         if not referral:
             return
@@ -103,12 +102,17 @@ class ReferralService:
         if not inviter or inviter.status != "active" or user.status != "active":
             state("blocked", "account_unavailable")
             return
-        for person in (user, inviter):
-            reason = self.douyin_state(person.id)
-            if reason:
-                state("pending" if reason == "douyin_pending" else "blocked",
-                      reason if person.id == user.id else "inviter_" + reason)
-                return
+        inviter_key = self.verified_email_hash(inviter)
+        if not inviter_key:
+            state('pending', 'inviter_email_pending')
+            return
+        inviter_identity = self.db.get(VerifiedQQ, inviter_key)
+        if inviter_identity is None:
+            self.db.add(VerifiedQQ(email_hash=inviter_key, first_user_id=inviter.id))
+            self.db.flush()
+        elif inviter_identity.first_user_id != inviter.id:
+            state('blocked', 'inviter_email_reused')
+            return
         grants = []
         for person in (inviter, user):
             TaskCapacityService(self.db, AuditService(self.db)).bootstrap_user(person)
@@ -118,25 +122,54 @@ class ReferralService:
                 state("blocked", "inviter_quota_unavailable" if person.id == inviter.id else "friend_quota_unavailable")
                 return
             grants.append(grant)
-        count = self.db.scalar(select(func.count()).select_from(Referral).where(
-            Referral.inviter_id == inviter.id, Referral.rewarded_at.is_not(None)))
-        tier = self.reward_tier(count)
-        days = min(tier, self.remaining_reward(inviter.id))
-        friend_days = min(tier, self.remaining_reward(user.id))
-        for grant, extra, recipient in zip(grants, (days, friend_days), ("inviter", "friend")):
-            before = grant.expires_at
-            if extra and grant.expires_at is not None:
-                grant.expires_at = max(aware(current), aware(grant.expires_at),
-                                       aware(grant.starts_at)) + timedelta(days=extra)
-            self.db.add(ReferralReceipt(friend_id=user.id, recipient=recipient,
-                user_id=grant.user_id, grant_id=grant.id, days=extra, expires_before=before,
-                expires_after=grant.expires_at, unlimited=before is None, created_at=current))
+        def credit_stage(stage, requested_days):
+            sides = ('inviter', 'friend') if stage == 'registered' else ('active_inviter', 'active_friend')
+            receipts = [self.db.get(ReferralReceipt, (user.id, side)) for side in sides]
+            if all(receipts):
+                return
+            if any(receipts):
+                raise RuntimeError('Incomplete referral stage receipts')
+            awarded = []
+            for person, grant, recipient in zip((inviter, user), grants, sides):
+                extra = min(requested_days, self.remaining_reward(person.id))
+                before = grant.expires_at
+                if extra and before is not None:
+                    grant.expires_at = max(aware(current), aware(before), aware(grant.starts_at)) + timedelta(days=extra)
+                self.db.add(ReferralReceipt(friend_id=user.id, recipient=recipient,
+                    user_id=person.id, grant_id=grant.id, days=extra, expires_before=before,
+                    expires_after=grant.expires_at, unlimited=before is None, created_at=current))
+                awarded.append(extra)
+            self.db.flush()
+            referral.inviter_days += awarded[0]
+            referral.friend_days += awarded[1]
+            AuditService(self.db).write(user.id, 'referral.stage_rewarded', 'user', user.id,
+                detail=f'stage={stage};inviter_days={awarded[0]};friend_days={awarded[1]}')
+
+        credit_stage('registered', 5)
+        reason = self.douyin_state(user.id)
+        if reason:
+            state('pending' if reason == 'douyin_pending' else 'blocked', reason)
+            return
+        tasks = self.db.scalars(select(SparkTask)
+            .join(DouyinAccount, DouyinAccount.id == SparkTask.douyin_account_id)
+            .join(AccountReferralIdentity, AccountReferralIdentity.account_id == DouyinAccount.id)
+            .join(VerifiedDouyin, VerifiedDouyin.platform_user_id == AccountReferralIdentity.platform_user_id)
+            .where(SparkTask.owner_user_id == user.id, SparkTask.enabled.is_(True),
+                DouyinAccount.owner_user_id == user.id, DouyinAccount.validation_state == 'valid',
+                VerifiedDouyin.first_user_id == user.id)).all()
+        capacity = TaskCapacityService(self.db, AuditService(self.db))
+        if not any(capacity.task_authorized(task, current) for task in tasks):
+            state('pending', 'task_pending')
+            return
+        completed = self.db.scalar(select(func.count()).select_from(Referral).where(
+            Referral.inviter_id == inviter.id, Referral.rewarded_at.is_not(None))) or 0
+        activation_days = self.reward_tier(completed) - 5
+        credit_stage('activated', activation_days)
         state("credited", "credited")
         referral.rewarded_at = current
-        referral.inviter_days, referral.friend_days = days, friend_days
         self.db.flush()
         AuditService(self.db).write(user.id, "referral.rewarded", "user", user.id,
-                                    detail=f"tier={tier};inviter_days={days};friend_days={friend_days}")
+            detail=f"registered=5;activation_tier={activation_days};inviter_days={referral.inviter_days};friend_days={referral.friend_days}")
 
     def generated_count(self, user_id):
         return self.db.scalar(select(func.count()).select_from(ReferralCode).where(
@@ -146,14 +179,14 @@ class ReferralService:
         self.lock()
         if user.status != "active" or user.role != "user":
             raise ValidationError("仅普通用户可领取邀请奖励")
-        key = self.qq_hash(user)
+        key = self.verified_email_hash(user)
         if not key:
-            raise ValidationError("请先在邮箱设置验证数字 QQ 账号@qq.com 邮箱")
+            raise ValidationError("请先在邮箱设置完成邮箱验证，支持任意有效邮箱")
         if self.generated_count(user.id) >= 3 and self.douyin_state(user.id):
             raise ValidationError("生成第 4 个及后续邀请码前，请先扫码核验未被其他用户使用的抖音账号")
         self.verified(user)
         if self.db.get(VerifiedQQ, key).first_user_id != user.id:
-            raise ValidationError("该 QQ 已参与过邀请活动，请勿重复注册")
+            raise ValidationError("该邮箱已参与过邀请活动，请勿重复注册")
         now = utc_now()
         recent = self.db.scalar(select(func.count()).select_from(ReferralCode).join(
             InviteCode, InviteCode.id == ReferralCode.invite_id).where(

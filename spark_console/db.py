@@ -14,6 +14,7 @@ from spark_console.referral_models import ReferralLock
 from spark_console import push_models
 from spark_console import profile_models
 from spark_console import renewal_models
+from spark_console import reward_models
 
 
 SQLITE_COLUMNS = {

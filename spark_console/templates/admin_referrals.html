@@ -4,13 +4,13 @@
 <div class="referral-page referral-admin">
 <header class="referral-heading"><div><span class="referral-eyebrow">邀请管理</span><h1>邀请奖励</h1><p>注册、排行与到账，一目了然。</p></div><a class="button quiet" href="/admin">返回后台</a></header>
 <div class="referral-stats">
-{% for label,value in [('累计注册',totals[0]),('累计到账',totals[1]),('今日注册',totals[2]),('今日到账',totals[3])] %}
+{% for label,value in [('累计注册',totals[0]),('全部阶段完成',totals[1]),('今日注册',totals[2]),('今日完成全部阶段',totals[3])] %}
 <div><span>{{ label }}</span><strong>{{ value }}<small>人</small></strong></div>
 {% endfor %}
 </div>
 <p class="referral-hint">今日统计：{{ today }} · 北京时间</p>
-<section class="panel referral-ranking"><div class="referral-section-title"><h2>邀请排行榜</h2><span class="referral-tag">TOP 10 · 按到账人数</span></div>
-{% for row in ranking %}<article class="item"><div><strong>{{ loop.index }}. {{ row.username or row.saved_name or '已删除用户' }}{% if not row.username %}（已删除）{% endif %}</strong><p>有效 {{ row.successful }} 人 / 注册 {{ row.registrations }} 人 · 今日注册 {{ row.today_registered }} 人 · 今日入账 {{ row.today_paid }} 人 · 累计奖励 {{ row.days }} 天</p></div><a href="/admin/referrals?q={{ (row.username or row.saved_name or '')|urlencode }}">查看记录</a></article>{% else %}<p class="muted">暂无邀请记录。</p>{% endfor %}</section>
+<section class="panel referral-ranking"><div class="referral-section-title"><h2>邀请排行榜</h2><span class="referral-tag">TOP 10 · 按全部阶段完成人数</span></div>
+{% for row in ranking %}<article class="item"><div><strong>{{ loop.index }}. {{ row.username or row.saved_name or '已删除用户' }}{% if not row.username %}（已删除）{% endif %}</strong><p>全部阶段完成 {{ row.successful }} 人 / 已注册 {{ row.registrations }} 人 · 今日注册 {{ row.today_registered }} 人 · 今日完成全部阶段 {{ row.today_paid }} 人 · 已入账奖励 {{ row.days }} 天</p></div><a href="/admin/referrals?q={{ (row.username or row.saved_name or '')|urlencode }}">查看记录</a></article>{% else %}<p class="muted">暂无邀请记录。</p>{% endfor %}</section>
 <section class="panel referral-ledger"><div class="referral-section-title"><h2>邀请与到账明细</h2><span class="muted">{{ total }} 条记录</span></div>
 <form method="get" action="/admin/referrals" class="referral-filters">
   <input type="search" name="q" value="{{ q }}" placeholder="搜索邀请人或好友用户名" aria-label="搜索用户名" maxlength="64">
@@ -23,8 +23,9 @@
 <p>注册时间：{{ referral.created_at|shanghai_time }} · <strong>{{ status_labels.get(outcome.status, '待核验') if outcome else '待核验' }}</strong></p>
 <p>{{ reason_labels.get(outcome.reason, '尚无核验记录') if outcome else '尚无核验记录' }}{% if outcome %} · 最近核验：{{ outcome.checked_at|shanghai_time }}{% endif %}</p>
 {% if referral.rewarded_at %}<p>到账时间：{{ referral.rewarded_at|shanghai_time }} · 邀请人 +{{ referral.inviter_days }} 天 · 好友 +{{ referral.friend_days }} 天</p>{% endif %}
+{% if not referral.rewarded_at and (referral.inviter_days or referral.friend_days) %}<p>注册阶段已入账 · 邀请人 +{{ referral.inviter_days }} 天 · 好友 +{{ referral.friend_days }} 天；等待任务阶段。</p>{% endif %}
 <details class="referral-rules"><summary>查看到账凭据与额度</summary>
-{% for side,label in [('inviter','邀请人'),('friend','好友')] %}
+{% for side,label in [('inviter','邀请人（注册阶段 / 历史奖励）'),('friend','好友（注册阶段 / 历史奖励）'),('active_inviter','邀请人（启用任务阶段）'),('active_friend','好友（启用任务阶段）')] %}
 {% set receipt=receipts.get(referral.friend_id, {}).get(side) %}
 {% if receipt %}<p>{{ label }}到账凭据：{% if receipt.unlimited %}原额度无限期，保留无限期（奖励 {{ receipt.days }} 天已记账）{% else %}到期时间 {{ receipt.expires_before|shanghai_time }} → <strong>{{ receipt.expires_after|shanghai_time }}</strong>{% endif %}</p>{% endif %}
 {% endfor %}

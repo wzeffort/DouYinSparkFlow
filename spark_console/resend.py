@@ -69,6 +69,18 @@ class ResendTransport:
         )
 
     def _render(self, template_key: str, payload: dict[str, str]) -> tuple[str, str]:
+        if template_key == 'quota_gift':
+            username = html.escape(str(payload.get('username', '用户')))
+            days = html.escape(str(payload.get('days', '14')))
+            slots = html.escape(str(payload.get('slots', '1')))
+            expiry = html.escape(str(payload.get('expires_at', '')))
+            url = html.escape(self.public_base_url + '/tasks', quote=True)
+            return (f'火花守护：已赠送 {days} 天基础额度',
+                f'<h2>{days} 天额度已到账</h2><p>{username}，感谢使用火花守护！'
+                f'你的账号同时绑定了抖音和已验证邮箱，原有额度已到期，本次已为基础额度免费续期 {days} 天。</p>'
+                f'<p>任务名额：{slots} 个（数量保持不变）。有效至：{expiry}。</p>'
+                '<p>已暂停的任务不会自动恢复。请先检查抖音登录状态、好友和发送内容，再手动启用任务。</p>'
+                f'<p><a href="{url}">查看额度与任务</a></p><p>同一账号本次活动只赠送一次，无需付款。</p>')
         if template_key == "verify_email":
             code = html.escape(str(payload.get("code", "")))
             username = html.escape(str(payload.get("username", "用户")))

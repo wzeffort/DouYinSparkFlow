@@ -485,16 +485,19 @@ class TaskCapacityService:
         self.session.flush()
         return [task.id for task in excess]
 
-    def reconcile_all(self, at: datetime | None = None) -> list[str]:
-        user_ids = self.session.scalars(
-            select(SparkTask.owner_user_id)
+    def reconcile_all(self, at: datetime | None = None, *, due_only: bool = False) -> list[str]:
+        query = select(SparkTask.owner_user_id)
+        query = (query
             .join(User, User.id == SparkTask.owner_user_id)
             .where(
                 SparkTask.enabled.is_(True),
                 User.role != "admin",
             )
-            .distinct()
-        ).all()
+            .distinct())
+        if due_only:
+            query = query.where(SparkTask.douyin_account_id.is_not(None),
+                SparkTask.next_run_at <= self._aware(at or datetime.now(timezone.utc)))
+        user_ids = self.session.scalars(query).all()
         paused = []
         for user_id in user_ids:
             paused.extend(self.reconcile_user(user_id, at))

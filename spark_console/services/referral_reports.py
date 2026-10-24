@@ -10,15 +10,22 @@ from spark_console.referral_models import Referral, ReferralOutcome, ReferralRec
 
 STATUS_LABELS = {"pending": "待完成核验", "blocked": "未发放", "credited": "已入账"}
 REASON_LABELS = {
+    "email_pending": "好友尚未完成邮箱验证",
+    "email_reused": "好友邮箱已被其他账号使用，未发奖励",
+    "inviter_email_pending": "邀请人尚未完成邮箱验证",
+    "inviter_email_reused": "邀请人邮箱已被其他账号使用，未发奖励",
+    "task_pending": "注册阶段奖励已记账，等待好友绑定账号的启用任务",
+    "inviter_qq_pending": "邀请人尚未完成邮箱验证（旧记录）",
+    "inviter_qq_reused": "邀请人邮箱已被其他账号使用（旧记录）",
     "douyin_pending": "好友尚未扫码核验抖音账号，或登录已失效",
     "inviter_douyin_pending": "邀请人尚未扫码核验抖音账号，或登录已失效",
     "douyin_reused": "好友绑定的抖音账号已被其他用户核验使用",
     "inviter_douyin_reused": "邀请人绑定的抖音账号已被其他用户核验使用",
-    "qq_pending": "尚未验证数字 QQ 邮箱", "qq_reused": "该 QQ 已被其他账号使用，未发奖励",
+    "qq_pending": "尚未完成邮箱核验（旧记录，按新规则重新检查）", "qq_reused": "该邮箱已被其他账号使用，未发奖励",
     "self_referral": "不能邀请自己", "account_unavailable": "账号已停用或删除",
     "inviter_quota_unavailable": "邀请人的基础额度不存在、已撤销或数量为零",
     "friend_quota_unavailable": "好友的基础额度不存在、已撤销或数量为零",
-    "credited": "双方奖励在同一事务中入账",
+    "credited": "邀请奖励已完成核算；新规则为注册先发 5 天、启用任务再按阶梯补发",
 }
 
 
