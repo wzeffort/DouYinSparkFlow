@@ -64,3 +64,46 @@ document.addEventListener('click', function (event) {
     hint.hidden = !active;
   });
 });
+
+// QR zoom dialog: <button data-qr-zoom="<url>" data-qr-amount data-qr-channel>.
+document.addEventListener('click', function (event) {
+  var trigger = event.target.closest ? event.target.closest('[data-qr-zoom]') : null;
+  if (trigger) {
+    event.preventDefault();
+    if (document.querySelector('.qr-zoom')) { return; }
+    var dialog = document.createElement('div');
+    dialog.className = 'qr-zoom';
+    dialog.setAttribute('role', 'dialog');
+    dialog.setAttribute('aria-modal', 'true');
+    dialog.setAttribute('aria-label', '收款码大图');
+    var amount = trigger.getAttribute('data-qr-amount') || '';
+    var channel = trigger.getAttribute('data-qr-channel') || '';
+    dialog.innerHTML =
+      '<div class="qr-zoom-card">' +
+        '<button type="button" class="qr-zoom-close" aria-label="关闭大图">×</button>' +
+        '<div class="qr-zoom-frame"><img alt="' + channel + '收款码大图" src="' + trigger.getAttribute('data-qr-zoom') + '"></div>' +
+        (amount ? '<p class="qr-zoom-caption">请用' + channel + '扫码，手动输入 <strong>' + amount + '</strong></p>' : '') +
+      '</div>';
+    dialog.addEventListener('click', function (closeEvent) {
+      if (closeEvent.target === dialog || closeEvent.target.classList.contains('qr-zoom-close')) {
+        dialog.remove();
+        document.body.classList.remove('qr-zoom-open');
+        if (trigger.focus) { trigger.focus(); }
+      }
+    });
+    document.addEventListener('keydown', function onKey(closeEvent) {
+      if (closeEvent.key === 'Escape' && document.querySelector('.qr-zoom')) {
+        document.querySelector('.qr-zoom').remove();
+        document.body.classList.remove('qr-zoom-open');
+        document.removeEventListener('keydown', onKey);
+      }
+    });
+    document.body.appendChild(dialog);
+    document.body.classList.add('qr-zoom-open');
+    var image = dialog.querySelector('img');
+    if (image) { image.addEventListener('click', function () { dialog.remove(); document.body.classList.remove('qr-zoom-open'); }); }
+    var closeButton = dialog.querySelector('.qr-zoom-close');
+    if (closeButton && closeButton.focus) { closeButton.focus(); }
+    return;
+  }
+});

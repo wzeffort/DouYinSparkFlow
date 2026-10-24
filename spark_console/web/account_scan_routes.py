@@ -193,6 +193,23 @@ def build_account_scan_router(
                 return _error(409, "scan_not_active", "扫码会话已结束")
         return JSONResponse({"accepted": True}, status_code=202, headers=NO_STORE)
 
+    @router.post("/accounts/{account_id}/refresh-name")
+    def refresh_account_name(request: Request, account_id: str, csrf_token: str = Form(default="")):
+        with session_scope(engine) as db:
+            user, record = auth.current(request, db)
+            auth.csrf(record, csrf_token)
+            if response := limited(user.id, "refresh-name", 6):
+                return response
+            try:
+                AccountService(db, cipher, AuditService(db)).refresh_display_name_owned(
+                    user.id, account_id
+                )
+            except NotFound:
+                return _error(404, "not_found", "未找到抖音账号")
+            except ValidationError:
+                return RedirectResponse("/accounts?name_refresh=0", status_code=303)
+        return RedirectResponse("/accounts?name_refresh=1", status_code=303)
+
     @router.post("/accounts/{account_id}/rename")
     def rename_account(
         request: Request,

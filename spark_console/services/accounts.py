@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import urllib.parse
 
+import httpx
 from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
@@ -19,6 +22,131 @@ from spark_console.models import (
 from spark_console.services import NotFound, ValidationError
 from spark_console.services.audits import AuditService
 from spark_console.services.contacts import merge_contacts
+
+
+ACCOUNT_INFO_URL = "https://www.douyin.com/passport/account/info/v2/?aid=6383"
+
+
+def _clean_name(value):
+    if not isinstance(value, str):
+        return None
+    value = value.strip()
+    return value if 1 <= len(value) <= 64 and all(ord(c) >= 32 for c in value) else None
+
+
+def _is_placeholder_name(value: str | None) -> bool:
+    # Passport "name"/"screen_name" default to "user<id>" for accounts that
+    # never set them; that is not the Douyin display nickname.
+    return bool(value) and re.fullmatch("user[0-9]+", value) is not None
+
+
+def _walk_self_objects(payload, sec_user_id, hits, depth=0):
+    if depth > 12 or len(hits) >= 5:
+        return
+    if isinstance(payload, dict):
+        if any(
+            isinstance(v, str) and len(v) > 40 and v == sec_user_id
+            for v in payload.values()
+        ):
+            hits.append(payload)
+        for value in payload.values():
+            _walk_self_objects(value, sec_user_id, hits, depth + 1)
+    elif isinstance(payload, list):
+        for value in payload:
+            _walk_self_objects(value, sec_user_id, hits, depth + 1)
+
+
+def _self_nickname_from_chat_html(html: str, sec_user_id: str) -> str | None:
+    if not sec_user_id:
+        return None
+    marker = 'id="RENDER_DATA"'
+    pos = html.find(marker)
+    while pos != -1:
+        start = html.find(">", pos) + 1
+        end = html.find("</script>", start)
+        if start and end > start:
+            try:
+                payload = json.loads(urllib.parse.unquote(html[start:end]))
+            except Exception:
+                payload = None
+            if payload is not None:
+                hits: list = []
+                _walk_self_objects(payload, sec_user_id, hits)
+                for obj in hits:
+                    for key in ("nickname", "nick_name", "nickName"):
+                        name = _clean_name(obj.get(key))
+                        if name and not _is_placeholder_name(name):
+                            return name
+        pos = html.find(marker, pos + 1)
+    return None
+
+
+def _douyin_display_name(storage_state: dict) -> str | None:
+    """Read the bound account's own Douyin nickname with its stored cookies.
+
+    The passport identity endpoint validates the session but its name fields
+    are "user<id>" placeholders for most accounts, so the real display
+    nickname is read from the chat page's embedded RENDER_DATA, anchored to
+    the session's own sec_user_id. Unauthenticated responses are rejected via
+    the user_id guard.
+    """
+    cookies = [
+        cookie
+        for cookie in (storage_state or {}).get("cookies", [])
+        if isinstance(cookie, dict)
+        and cookie.get("name")
+        and isinstance(cookie.get("value"), str)
+        and "douyin" in str(cookie.get("domain", "")).lower()
+    ]
+    if not cookies:
+        return None
+    header = "; ".join(f"{c['name']}={c['value']}" for c in cookies)
+    try:
+        response = httpx.get(
+            ACCOUNT_INFO_URL,
+            headers={"cookie": header, "referer": "https://www.douyin.com/"},
+            timeout=8,
+            follow_redirects=False,
+        )
+        if response.status_code != 200:
+            return None
+        body = response.json()
+    except Exception:
+        return None
+    data = body.get("data") if isinstance(body, dict) else None
+    if not (
+        isinstance(data, dict)
+        and body.get("message") == "success"
+        and data.get("error_code") in (0, None)
+        and data.get("user_id")
+    ):
+        return None
+    passport_name = _clean_name(data.get("nickname")) or _clean_name(data.get("name"))
+    try:
+        chat = httpx.get(
+            "https://www.douyin.com/chat",
+            headers={
+                "cookie": header,
+                "referer": "https://www.douyin.com/",
+                "user-agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"
+                    " (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36"
+                ),
+            },
+            timeout=12,
+            follow_redirects=False,
+        )
+        if chat.status_code == 200:
+            nickname = _self_nickname_from_chat_html(
+                chat.text, data.get("sec_user_id") or ""
+            )
+            if nickname:
+                return nickname
+    except Exception:
+        pass
+    if passport_name and not _is_placeholder_name(passport_name):
+        return passport_name
+    return None
 
 
 class AccountService:
@@ -149,6 +277,26 @@ class AccountService:
         account.display_name = self._validated_display_name(display_name)
         self.session.flush()
         self.audit.write(owner_id, "account.renamed", "douyin_account", account.id)
+        return account
+
+    def refresh_display_name_owned(self, owner_id: str, account_id: str) -> DouyinAccount:
+        account = self.get_owned(owner_id, account_id)
+        raw = self.cipher.decrypt(account.encrypted_cookies, account.cookie_nonce)
+        try:
+            envelope = json.loads(raw)
+        except (ValueError, UnicodeDecodeError) as error:
+            raise ValidationError("账号凭据无效，请重新绑定") from error
+        storage_state = (
+            envelope.get("storage_state")
+            if isinstance(envelope, dict) and envelope.get("version") == 2
+            else envelope
+        )
+        name = _douyin_display_name(storage_state if isinstance(storage_state, dict) else {})
+        if name is None:
+            raise ValidationError("暂时无法获取昵称，请稍后重试；登录失效时请重新扫码绑定")
+        account.display_name = self._validated_display_name(name)
+        self.session.flush()
+        self.audit.write(owner_id, "account.name_refreshed", "douyin_account", account.id)
         return account
 
     def get_owned(self, owner_id: str, account_id: str) -> DouyinAccount:

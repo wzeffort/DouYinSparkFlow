@@ -1,2 +1,89 @@
 .renewal-kicker{color:#d54f43;font-size:13px;font-weight:750;letter-spacing:.08em}.renewal-head h1{margin-top:8px}.renewal-plans{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:18px;margin:22px 0}.renewal-plan{display:flex;flex-direction:column;gap:8px}.renewal-plan-title{display:flex;align-items:center;justify-content:space-between;gap:12px}.renewal-plan-title h2{margin:0}.renewal-plan-title span{font-size:13px;color:#64748b}.renewal-price{font-size:48px;font-weight:800;line-height:1.2;margin:12px 0;color:#1e293b;font-variant-numeric:tabular-nums}.renewal-price small{font-size:22px;margin-right:4px}.renewal-price del{font-size:16px;font-weight:500;color:#8b95a7;margin-left:12px}.renewal-friend{border:2px solid #f66a56;background:#fff8f4}.renewal-eligibility{font-weight:700;color:#bc4939}.renewal-plan form{margin-top:auto}.renewal-pay-buttons{display:flex;gap:8px;margin-top:12px}.renewal-pay-buttons button{flex:1}.renewal-rules p{line-height:1.8;color:#5b6b82}.renewal-checkout{display:grid;grid-template-columns:1fr 320px;gap:30px;align-items:center}.renewal-code{text-align:center}.renewal-code img{width:260px;max-width:100%;height:auto;border:1px solid #e2e8f0;border-radius:16px;padding:10px;background:white}.renewal-code-placeholder{display:flex;flex-direction:column;justify-content:center;gap:12px;min-height:230px;border:2px dashed #cbd5e1;border-radius:16px;background:#f8fafc;color:#64748b}.renewal-status{font-weight:750;color:#bc4939}.renewal-order-row,.renewal-admin-order{display:flex;justify-content:space-between;gap:18px;padding:20px 0;border-bottom:1px solid #e2e8f0;overflow-wrap:anywhere}.renewal-admin-code{width:180px;height:auto}.renewal-admin-order form{margin-bottom:10px}.renewal-check{display:flex;align-items:center;gap:8px;font-size:13px}.renewal-check input{width:auto}.nav-renewal{background:#fb6251!important;color:#fff!important;font-weight:750;box-shadow:0 5px 15px #fb62512b}.renewal-global-button{position:fixed;right:24px;bottom:24px;z-index:35;background:#fb6251;color:#fff;padding:13px 23px;border-radius:999px;box-shadow:0 6px 24px #e4574540;font-weight:750;text-decoration:none}.renewal-global-button:focus-visible{outline:3px solid #1e293b;outline-offset:3px}.quota-renew-button{opacity:1!important;white-space:nowrap}.renewal-plan button:disabled{opacity:.45;cursor:not-allowed}@media(max-width:720px){.renewal-plans{grid-template-columns:1fr}.renewal-checkout{grid-template-columns:1fr}.renewal-admin-order{flex-direction:column}.renewal-order-row{align-items:center}.renewal-global-button{right:14px;bottom:14px;padding:11px 19px}.renewal-price{font-size:42px}main{padding-bottom:88px!important}}
 .renewal-service-facts{display:flex;flex-wrap:wrap;gap:12px 28px;margin:18px 0 24px;padding:16px 20px;background:#eaf0f7;border-radius:14px;color:#5b6b82;font-size:13px}.renewal-service-facts b{margin-right:5px;color:#243247}.renewal-plan .renewal-price{font-size:42px;letter-spacing:-.035em;margin-bottom:0}.renewal-plan .renewal-price del{font-size:14px;letter-spacing:0}.renewal-original{font-size:12px;color:#8490a2;margin:0}.renewal-saving{font-size:13px;font-weight:700;color:#42695d}.renewal-plan-note{font-size:13px;line-height:1.75;color:#5b6b82;min-height:44px}.renewal-plan .renewal-plan-badge{color:#a84432;background:#ffebe5;border-radius:999px;padding:5px 9px;font-size:11px;font-weight:750;white-space:nowrap}.renewal-recommended{border-color:#f8b2a3}.renewal-resume{margin-top:auto;text-align:center}.renewal-offer-link{font-size:13px}.renewal-guide{margin-top:20px;padding:28px}.renewal-section-heading{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}.renewal-section-heading h2{margin:7px 0 0;font-size:23px}.renewal-guide-tag{font-size:12px;border:1px solid #dbe4ee;border-radius:999px;padding:7px 12px;color:#52637b;white-space:nowrap}.renewal-steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:20px}.renewal-steps article{padding:20px;border-radius:14px;background:#f4f7fb}.renewal-step-index{display:grid;place-items:center;width:32px;height:32px;border-radius:10px;background:#e6edf6;color:#385374;font-weight:800;font-size:15px}.renewal-steps h3{margin:15px 0 8px;font-size:16px}.renewal-steps p,.renewal-offer-rules p{color:#65748a;font-size:14px;line-height:1.85;margin:0}.renewal-support{display:flex;gap:28px;align-items:center;margin:22px 0 14px;border:1px solid #f8c9bd;border-radius:14px;background:#fff7f3;padding:18px 22px}.renewal-support span{display:block;color:#a56c59;font-size:12px;margin-bottom:4px}.renewal-support strong{white-space:nowrap;color:#a84432;font-size:20px}.renewal-support p{color:#735d55;font-size:14px;line-height:1.8;margin:0}.renewal-payment-hint{font-size:12px;line-height:1.85;color:#7b8798;margin:16px 0 0}.renewal-offer-rules{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px}.renewal-offer-rules article{border-left:3px solid #97b6a6;background:#f5faf7;padding:22px;border-radius:0 14px 14px 0}.renewal-offer-rules article+article{border-color:#efa581;background:#fff8f2}.renewal-rule-label{font-size:12px;font-weight:750;color:#547164}.renewal-offer-rules article+article .renewal-rule-label{color:#a96540}.renewal-offer-rules h3{font-size:20px;margin:12px 0}.renewal-offer-rules h3 strong{font-size:28px}.renewal-offer-rules h3 small{font-size:12px;font-weight:500;margin-left:10px;color:#946f54}.renewal-duration{margin-top:20px}.renewal-duration-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:22px;margin-top:24px}.renewal-duration-grid span{font-size:12px;color:#7b8798;display:block}.renewal-duration-grid strong{font-size:15px;margin-top:9px;display:block}.renewal-duration-grid p{font-size:13px;color:#65748a}.renewal-no-orders{padding:20px 0;color:#617188}.renewal-no-orders strong{font-size:15px}.renewal-no-orders p{font-size:13px}@media(max-width:720px){.renewal-service-facts{display:grid;gap:10px;padding:14px 16px}.renewal-steps,.renewal-offer-rules,.renewal-duration-grid{grid-template-columns:1fr;gap:12px}.renewal-guide{padding:20px 16px}.renewal-section-heading{align-items:flex-start;flex-wrap:wrap;gap:12px}.renewal-section-heading h2{font-size:21px}.renewal-support{flex-direction:column;align-items:flex-start;gap:12px;padding:16px}.renewal-plan-note{min-height:0}.renewal-duration-grid>div{border-bottom:1px solid #e6edf4;padding-bottom:12px}.renewal-duration-grid>div:last-child{border-bottom:0}.renewal-offer-rules h3 small{display:block;margin:8px 0 0}}
+
+/* Post-payment manual confirmation: impossible to miss. */
+.renewal-confirm{text-align:center;border:2px solid var(--ember);box-shadow:0 0 0 4px rgba(243,101,82,.10),0 18px 50px rgba(31,38,61,.10)}
+.renewal-confirm h2{margin:6px 0 16px;font-size:22px}
+.renewal-confirm-steps{display:flex;flex-wrap:wrap;justify-content:center;gap:8px 18px;list-style:none;margin:0 0 20px;padding:0}
+.renewal-confirm-steps li{display:inline-flex;align-items:center;gap:7px;color:var(--muted);font-size:13px;font-weight:600}
+.renewal-confirm-steps li:not(:last-child)::after{content:"→";margin-left:11px;color:#e3a79b}
+.renewal-confirm-button{width:100%;min-height:58px;padding:16px 20px;font-size:17px;font-weight:800;letter-spacing:.02em;border-radius:14px;box-shadow:0 12px 30px rgba(243,101,82,.35);animation:renewal-pulse 2.2s ease-in-out infinite}
+.renewal-confirm-button:hover{transform:translateY(-1px)}
+.renewal-confirm-button:disabled{opacity:.65;cursor:progress;animation:none}
+.renewal-confirm-note{margin:12px 0 0;color:var(--muted);font-size:12px}
+@keyframes renewal-pulse{0%,100%{box-shadow:0 12px 30px rgba(243,101,82,.35)}50%{box-shadow:0 12px 34px rgba(243,101,82,.62),0 0 0 8px rgba(243,101,82,.10)}}
+@media(prefers-reduced-motion:reduce){.renewal-confirm-button{animation:none}}
+@media(max-width:640px){.renewal-confirm-steps{flex-direction:column;align-items:center;gap:10px}.renewal-confirm-steps li:not(:last-child)::after{content:"↓";margin:8px 0 0;transform:translateX(14px)}}
+
+/* Checkout page redesign: centered payment card, mobile sticky confirm. */
+.renewal-pay-wrap{max-width:620px;margin:0 auto;display:grid;gap:16px}
+.renewal-head{margin-bottom:20px}
+.renewal-order-id{margin:8px 0 0;color:var(--muted);font-size:13px;letter-spacing:.02em}
+.renewal-pay{padding:26px 24px 24px;text-align:center}
+.renewal-pay-top{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap}
+.renewal-pay-meta{color:var(--muted);font-size:13px;font-weight:600}
+.renewal-pay-amount{margin:10px 0 16px;font-size:50px;font-weight:800;line-height:1.1;color:#1e293b;font-variant-numeric:tabular-nums;letter-spacing:-.02em}
+.renewal-pay-amount small{font-size:24px;margin-right:2px;color:#64748b}
+.renewal-status-pill{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border-radius:999px;font-size:12px;font-weight:750;background:#fff4e0;color:#9a6208}
+.renewal-status-pill::before{content:"";width:7px;height:7px;border-radius:50%;background:currentColor}
+.renewal-status-pill.status-pending{background:#fff4e0;color:#9a6208}
+.renewal-status-pill.status-submitted,.renewal-status-pill.status-fulfilling{background:#e8f1fe;color:#2b6cb0}
+.renewal-status-pill.status-approved{background:#e5f5ef;color:#168565}
+.renewal-status-pill.status-cancelled,.renewal-status-pill.status-rejected{background:#f0f1f5;color:#737b8d}
+.renewal-pay-qr{display:grid;justify-items:center;gap:6px}
+.renewal-qr-frame{position:relative;padding:14px;border-radius:18px;background:#fff;box-shadow:0 10px 30px rgba(31,38,61,.08)}
+.renewal-qr-frame img{display:block;width:242px;max-width:100%;height:auto;border-radius:10px}
+.renewal-qr-frame::before{content:"";position:absolute;inset:0;border-radius:18px;background:
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/3px 26px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/26px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/3px 26px no-repeat;pointer-events:none}
+.renewal-qr-hint{margin:12px 0 2px;color:#5b6b82;font-size:14px}
+.renewal-qr-large{color:var(--ember-dark);font-size:13px;font-weight:700;text-decoration:underline;text-underline-offset:3px}
+.renewal-qr-final{margin:8px 0 0;font-size:17px;font-weight:750;color:#243247}
+.renewal-pay-error{text-align:left;border-left:4px solid var(--ember)}
+.renewal-go-tasks{min-height:48px;font-size:15px}
+.renewal-support{margin:0;display:flex;gap:26px;align-items:center;border:1px solid #f8c9bd;border-radius:16px;background:#fff7f3;padding:18px 22px}
+.renewal-faq{border:1px solid var(--mist);border-radius:16px;background:#fbfcfe;padding:16px 20px;color:#5b6b82;font-size:13px}
+.renewal-faq summary{cursor:pointer;font-weight:750;color:#3d4a5f}
+.renewal-faq p{line-height:1.85;margin:12px 0 0}
+.renewal-cancel-form{margin-top:14px}
+.renewal-sticky-cta{display:none}
+@media(max-width:640px){
+  .renewal-pay{padding:22px 16px 20px}
+  .renewal-pay-amount{font-size:42px}
+  .renewal-qr-frame img{width:210px}
+  .renewal-confirm-steps{flex-direction:column;align-items:center;gap:10px}
+  .renewal-confirm-steps li:not(:last-child)::after{content:"↓";margin:8px 0 0;transform:translateX(14px)}
+  .renewal-support{flex-direction:column;align-items:flex-start;gap:10px;padding:16px}
+  .renewal-sticky-cta{position:fixed;left:0;right:0;bottom:0;z-index:45;display:flex;align-items:center;gap:12px;padding:10px 14px calc(10px + env(safe-area-inset-bottom));background:rgba(255,255,255,.97);box-shadow:0 -10px 30px rgba(24,32,51,.14);backdrop-filter:blur(8px)}
+  .renewal-sticky-cta span{flex:1;font-size:13px;font-weight:700;color:#3d4a5f}
+  .renewal-sticky-cta button{flex:1.5;min-height:46px;padding:12px 16px;font-size:15px;border-radius:12px}
+  body:has(.renewal-sticky-cta) main{padding-bottom:120px}
+}
+
+/* QR large-view dialog (in-page, no navigation). */
+.renewal-qr-large{border:0;background:none;padding:0;font:inherit;color:var(--ember-dark);font-size:13px;font-weight:700;text-decoration:underline;text-underline-offset:3px;cursor:pointer}
+.renewal-qr-large:hover{color:var(--ember)}
+.qr-zoom{position:fixed;inset:0;z-index:70;display:grid;place-items:center;padding:24px;background:rgba(18,23,36,.62)}
+.qr-zoom-card{position:relative;width:min(440px,100%);padding:26px;border-radius:22px;background:#fff;box-shadow:0 30px 90px rgba(10,15,27,.4);text-align:center;animation:renewal-gate-in .2s ease-out}
+.qr-zoom-close{position:absolute;z-index:2;right:12px;top:12px;width:40px;height:40px;border:0;border-radius:50%;background:#f2f4f8;color:#4e586e;font-size:24px;line-height:1;cursor:pointer}
+.qr-zoom-close:hover{background:#e8ebf2;color:#182033}
+.qr-zoom-frame{position:relative;padding:14px;border-radius:18px;background:#fff;box-shadow:0 10px 30px rgba(31,38,61,.08)}
+.qr-zoom-frame img{display:block;width:100%;height:auto;border-radius:10px;cursor:zoom-out}
+.qr-zoom-frame::before{content:"";position:absolute;inset:0;border-radius:18px;background:
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/30px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px top 10px/3px 30px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/30px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px top 10px/3px 30px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/30px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) left 10px bottom 10px/3px 30px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/30px 3px no-repeat,
+ linear-gradient(#fb6251,#fb6251) right 10px bottom 10px/3px 30px no-repeat;pointer-events:none}
+.qr-zoom-caption{margin:16px 0 0;color:#5b6b82;font-size:14px}
+body.qr-zoom-open{overflow:hidden}
+@media(prefers-reduced-motion:reduce){.qr-zoom-card{animation:none}}
