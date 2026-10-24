@@ -1,0 +1,15 @@
+[Unit]
+Description=Spark weekly account cookie validation (read-only Douyin check)
+After=network-online.target docker.service
+Wants=network-online.target
+
+# /etc/spark-account-validator.env is a 0600 snapshot of the spark-web
+# container environment (SPARK_DATABASE_URL, key file paths). Regenerate it
+# after changing compose environment: docker inspect spark-shared-apps-spark-web-1
+# --format '{{range .Config.Env}}{{println .}}{{end}}' > /etc/spark-account-validator.env
+# The image tag is pinned to the release; update it when upgrading.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/docker run --rm --network host --user 10001:10001 --env-file /etc/spark-account-validator.env -v /opt/spark-shared-db/deploy/shared-db/secrets/cookie.key:/run/secrets/cookie.key:ro -v /opt/spark-shared-db/deploy/shared-db/secrets/session.key:/run/secrets/session.key:ro -v /opt/spark-shared-db/deploy/shared-db/secrets/pii.key:/run/secrets/pii.key:ro -v spark-shared-apps_spark-runtime:/data -v /opt/spark-shared-db/ops/validate_accounts.py:/srv/validate_accounts.py:ro spark-shared:login-fix12-20261025 python /srv/validate_accounts.py
+NoNewPrivileges=true
