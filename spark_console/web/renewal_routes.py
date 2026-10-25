@@ -47,6 +47,13 @@ def build_renewal_router(engine, auth, pii, page):
                 bound_counts = {gid: n for gid, n in bound_counts.items() if gid in renewable_ids}
                 if bound_counts:
                     default_bound = max(bound_counts, key=bound_counts.get)
+                else:
+                    # 无绑定任务的用户（如任务已删除）：默认续期注册基础额度，
+                    # 续期后原任务恢复时无需再选择
+                    base = next((g.id for g in grants if g.label == "注册基础额度"), None)
+                    if base is None:
+                        base = next((g.id for g in grants if "基础" in (g.label or "")), None)
+                    default_bound = base
             orders = db.scalars(select(RenewalOrder).where(RenewalOrder.user_id == user.id)
                                 .order_by(RenewalOrder.created_at.desc()).limit(20)).all()
             return page(request, 'renewal.html', title='我的续卡', plans=renewals.catalog(user.id),
