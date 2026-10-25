@@ -2,9 +2,9 @@ from io import BytesIO
 from PIL import Image, UnidentifiedImageError
 from fastapi import APIRouter, Form, HTTPException, Request, UploadFile, File, Query
 from fastapi.responses import RedirectResponse, Response
-from sqlalchemy import select, case, func
+from sqlalchemy import func, select, case, func
 from spark_console.db import session_scope
-from spark_console.models import User
+from spark_console.models import User, TaskQuotaBinding, SparkTask
 from spark_console.renewal_models import RenewalOrder, RenewalPaymentCode
 from spark_console.services import ValidationError
 from spark_console.services.audits import AuditService
@@ -34,10 +34,24 @@ def build_renewal_router(engine, auth, pii, page):
             if grant: invoke(lambda: renewals._target(user.id, grant))
             grants = [g for g in TaskCapacityService(db, AuditService(db)).grants_for(user.id)
                       if g.amount == 1 and g.revoked_at is None and g.expires_at is not None] if user.role != 'admin' else []
+            # 默认续期「现在有任务的名额」：统计该用户任务绑定的名额
+            default_bound = None
+            if grants:
+                bound_counts = dict(db.execute(
+                    select(TaskQuotaBinding.grant_id, func.count())
+                    .join(SparkTask, TaskQuotaBinding.task_id == SparkTask.id)
+                    .where(SparkTask.owner_user_id == user.id)
+                    .group_by(TaskQuotaBinding.grant_id)
+                ).all())
+                renewable_ids = {g.id for g in grants}
+                bound_counts = {gid: n for gid, n in bound_counts.items() if gid in renewable_ids}
+                if bound_counts:
+                    default_bound = max(bound_counts, key=bound_counts.get)
             orders = db.scalars(select(RenewalOrder).where(RenewalOrder.user_id == user.id)
                                 .order_by(RenewalOrder.created_at.desc()).limit(20)).all()
             return page(request, 'renewal.html', title='我的续卡', plans=renewals.catalog(user.id),
                         referral_count=renewals.referral_count(user.id), selected_grant=grant,
+                        default_bound=default_bound,
                         grants=grants, orders=orders, labels=PLANS, **context)
 
     @router.post('/renewal/orders')

@@ -12,7 +12,7 @@
 {% if plan.key == 'year_friend' %}<p class="renewal-eligibility">已成功邀请 {{ referral_count }} 位好友</p>{% endif %}
 {% if plan.resume_order_id %}<a class="button renewal-resume" href="/renewal/orders/{{ plan.resume_order_id }}">继续待处理订单 →</a>{% else %}
 <form method="post" action="/renewal/orders" data-once><input type="hidden" name="csrf_token" value="{{ csrf_token }}"><input type="hidden" name="plan" value="{{ plan.key }}">
-<label>开通方式<select name="grant"><option value="">新增 1 个名额</option>{% for g in grants %}<option value="{{ g.id }}"{% if selected_grant == g.id %} selected{% endif %}>续期 {{ g.label }} · 至 {{ g.expires_at|shanghai_time }}</option>{% endfor %}</select></label>
+<label>续期现有名额（有任务的名额已默认选中）<select name="grant_top" data-grant-top>{% for g in grants %}<option value="{{ g.id }}"{% if (selected_grant == g.id) or (not selected_grant and default_bound == g.id) %} selected{% endif %}>续期 {{ g.label }} · 至 {{ g.expires_at|shanghai_time }}</option>{% endfor %}</select></label><input type="hidden" name="grant" value="{% if default_bound %}{{ default_bound }}{% endif %}"><label>新开名额（新增时在下面选择）<select name="grant_new" data-grant-new><option value="" selected>新增 1 个名额</option></select></label>
 <div class="renewal-pay-buttons"><button name="channel" value="wechat"{% if not plan.eligible %} disabled{% endif %}>微信付款</button><button name="channel" value="alipay" class="quiet"{% if not plan.eligible %} disabled{% endif %}>支付宝付款</button></div></form>
 {% if not plan.eligible %}<a class="renewal-offer-link" href="{{ '/invitations' if referral_count < 2 else '/renewal#annual-rules' }}">{{ '去邀请好友 →' if referral_count < 2 else '查看后续年卡规则 →' }}</a>{% endif %}{% endif %}
 </article>{% endfor %}
@@ -30,3 +30,20 @@
 <section class="panel renewal-duration"><h2>有效期怎样计算？</h2><div class="renewal-duration-grid"><div><span>已有名额未到期</span><strong>从原到期日延长</strong><p>剩余天数保留。</p></div><div><span>名额已到期 / 新购</span><strong>从核实开通时开始</strong><p>每份订单开通或续期 1 个名额。</p></div><div><span>已经暂停的任务</span><strong>开通后手动启用</strong><p>不补发过期期间的消息。</p></div></div><p class="renewal-payment-hint">月卡 30 天，两个月卡 60 天，季卡 90 天，年卡 365 天；整组额度续期请联系管理员。</p></section>
 <section class="panel"><div class="panel-head"><h2>我的订单</h2><span>最近 20 笔</span></div>{% for order in orders %}<div class="renewal-order-row"><div><strong>{{ labels[order.plan_key][0] }} · ¥{{ '%.2f'|format(order.price_cents / 100) }}</strong><p>{{ {'cancelled':'已取消','pending':'等待付款','submitted':'已提交，待核实','approved':'已核实开通','rejected':'未通过核实','fulfilling':'处理中'}.get(order.status, '处理中') }} · {{ order.created_at|shanghai_time }}</p></div><a href="/renewal/orders/{{ order.id }}">查看订单 →</a></div>{% else %}<div class="renewal-no-orders"><strong>还没有续卡订单</strong><p>选好上方套餐后，订单和开通进度会显示在这里。</p></div>{% endfor %}</section>
 {% endblock %}
+
+<script>
+document.querySelectorAll('form').forEach(function (form) {
+  var top = form.querySelector('[data-grant-top]');
+  var fresh = form.querySelector('[data-grant-new]');
+  var hidden = form.querySelector('[data-grant-hidden]') || form.querySelector('input[name="grant"]');
+  if (!top || !fresh || !hidden) { return; }
+  top.addEventListener('change', function () {
+    hidden.value = top.value;
+    fresh.selectedIndex = 0;
+  });
+  fresh.addEventListener('change', function () {
+    hidden.value = '';
+    top.selectedIndex = -1;
+  });
+});
+</script>
