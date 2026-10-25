@@ -8,6 +8,7 @@ from urllib.parse import urlencode
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import RedirectResponse
 from sqlalchemy import select
+from sqlalchemy.orm import aliased
 from sqlalchemy.exc import IntegrityError
 
 from spark_console.db import session_scope
@@ -66,6 +67,7 @@ class AdminInvite:
     invite: InviteCode
     status: str
     used_by_username: str | None
+    created_by_username: str | None
     can_revoke: bool
     code: str | None
 
@@ -284,14 +286,16 @@ def admin_invite_items(
     db, cipher: CookieCipher | None = None
 ) -> list[AdminInvite]:
     now = datetime.now(timezone.utc)
+    creator = aliased(User)
     rows = db.execute(
-        select(InviteCode, User.username)
+        select(InviteCode, User.username, creator.username)
         .outerjoin(User, InviteCode.used_by_user_id == User.id)
+        .outerjoin(creator, InviteCode.created_by_user_id == creator.id)
         .order_by(InviteCode.created_at.desc())
     ).all()
     items = []
     service = InviteService(db, AuditService(db), cipher)
-    for invite, username in rows:
+    for invite, username, creator_username in rows:
         expires_at = invite.expires_at
         if expires_at.tzinfo is None:
             expires_at = expires_at.replace(tzinfo=timezone.utc)
@@ -308,6 +312,7 @@ def admin_invite_items(
                 invite=invite,
                 status=status,
                 used_by_username=username,
+                created_by_username=creator_username,
                 can_revoke=status == "有效",
                 code=service.reveal(invite.id),
             )
