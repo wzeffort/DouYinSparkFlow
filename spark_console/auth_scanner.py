@@ -256,6 +256,8 @@ class DouyinQrScanner:
         expires_at: datetime | None = None,
         on_view=None,
         next_interaction=None,
+        on_stage=None,
+        login_mode: str = "qr",
     ) -> ScannedAccount:
         if self._prepared is None:
             await self.ensure_prepared(cancelled=cancelled, expires_at=expires_at)
@@ -266,6 +268,15 @@ class DouyinQrScanner:
         deadline = self._deadline(expires_at)
         try:
             await self._checkpoint(cancelled, deadline)
+            if login_mode == "sms":
+                await self._await_stage(
+                    self._sms_login_flow(
+                        prepared, on_stage, next_interaction, cancelled, deadline
+                    ),
+                    cancelled,
+                    deadline,
+                )
+                return await self._capture_account(prepared, deadline)
             await self._await_stage(
                 self._publish_qr(on_qr, prepared.full_png, prepared.crop_png),
                 cancelled,
@@ -293,54 +304,170 @@ class DouyinQrScanner:
                 cancelled,
                 deadline,
             )
-            profile_name, profile_id = await self._await_stage(
-                self._optional_account_profile(prepared.context, deadline), cancelled, deadline
-            )
-            candidate = profile_name or await self._await_stage(
-                self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
-                cancelled,
-                deadline,
-            )
-            if _is_placeholder_name(candidate):
-                candidate = None
-            storage_state = await self._await_stage(
-                prepared.context.storage_state(), cancelled, deadline
-            )
-            if not candidate:
-                from spark_console.services.accounts import _douyin_display_name
-                stored_lookup = await self._await_stage(
-                    asyncio.get_running_loop().run_in_executor(
-                        None, _douyin_display_name, storage_state
-                    ),
-                    cancelled,
-                    deadline,
-                )
-                candidate = stored_lookup
-            display_name = candidate or "抖音账号"
-            unique_id = profile_id or await self._await_stage(
-                self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
-                cancelled,
-                deadline,
-            )
-            conversation_names = await self._await_stage(
-                self._visible_conversation_names(prepared.page), cancelled, deadline
-            )
-            contact_identities = await self._await_stage(
-                prepared.user_info.drain(), cancelled, deadline
-            )
-            platform_user_id = await self._await_stage(
-                read_verified_user_id(prepared.context), cancelled, deadline
-            )
-            return ScannedAccount(
-                display_name,
-                unique_id,
-                storage_state,
-                conversation_names,
-                contact_identities,
-                platform_user_id,
-            )
+            return await self._capture_account(prepared, deadline)
         finally:
             await prepared.context.close()
+
+    async def _capture_account(self, prepared, deadline) -> ScannedAccount:
+        profile_name, profile_id = await self._await_stage(
+            self._optional_account_profile(prepared.context, deadline), None, deadline
+        )
+        candidate = profile_name or await self._await_stage(
+            self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
+            None,
+            deadline,
+        )
+        if _is_placeholder_name(candidate):
+            candidate = None
+        storage_state = await self._await_stage(
+            prepared.context.storage_state(), None, deadline
+        )
+        if not candidate:
+            from spark_console.services.accounts import _douyin_display_name
+            stored_lookup = await self._await_stage(
+                asyncio.get_running_loop().run_in_executor(
+                    None, _douyin_display_name, storage_state
+                ),
+                None,
+                deadline,
+            )
+            candidate = stored_lookup
+        display_name = candidate or "抖音账号"
+        unique_id = profile_id or await self._await_stage(
+            self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
+            None,
+            deadline,
+        )
+        conversation_names = await self._await_stage(
+            self._visible_conversation_names(prepared.page), None, deadline
+        )
+        contact_identities = await self._await_stage(
+            prepared.user_info.drain(), None, deadline
+        )
+        platform_user_id = await self._await_stage(
+            read_verified_user_id(prepared.context), None, deadline
+        )
+        return ScannedAccount(
+            display_name,
+            unique_id,
+            storage_state,
+            conversation_names,
+            contact_identities,
+            platform_user_id,
+        )
+
+    async def _sms_login_flow(self, prepared, on_stage, next_interaction, cancelled, deadline):
+        page = prepared.page
+        loop = asyncio.get_running_loop()
+
+        async def stage(name):
+            if on_stage is not None:
+                await self._callback(on_stage, name)
+
+        async def wait_action(want_kind, seconds):
+            poll_deadline = min(deadline, loop.time() + seconds)
+            while loop.time() < poll_deadline:
+                if cancelled():
+                    raise ScanCancelled()
+                action = next_interaction() if callable(next_interaction) else None
+                if inspect.isawaitable(action):
+                    action = await action
+                if isinstance(action, dict) and action.get("kind") == want_kind:
+                    return str(action.get("text", ""))
+                await asyncio.sleep(1.0)
+        # 1) switch the cloud login page to SMS-code login
+        switched = False
+        while loop.time() < deadline and not switched:
+            if cancelled():
+                raise ScanCancelled()
+            try:
+                for label in ("短信登录", "验证码登录", "使用短信验证码登录"):
+                    for button in await page.get_by_text(label, exact=False).all():
+                        if await button.is_visible():
+                            await button.click(timeout=5_000)
+                            switched = True
+                            break
+                    if switched:
+                        break
+            except ScanCancelled:
+                raise
+            except Exception:
+                pass
+            if not switched:
+                await asyncio.sleep(0.5)
+        if not switched:
+            raise QrLoadFailed()
+        # 2) publish the phone stage first, then wait for the number
+        await stage("awaiting_phone")
+        phone = await wait_action("phone", 200)
+        if not phone:
+            raise LoginTimedOut()
+        phone_input = None
+        for selector in ('input[type="tel"]', 'input[placeholder*="手机"]', 'input[name*="phone"]', 'input[name*="mobile"]'):
+            try:
+                candidate = page.locator(selector).first
+                if await candidate.is_visible():
+                    phone_input = candidate
+                    break
+            except Exception:
+                continue
+        if phone_input is None:
+            raise QrLoadFailed()
+        await phone_input.click(timeout=5_000)
+        await page.keyboard.type(phone)
+        sent = False
+        for label in ("获取验证码", "发送验证码", "获取短信验证码"):
+            try:
+                for button in await page.get_by_text(label, exact=False).all():
+                    if await button.is_visible():
+                        await button.click(timeout=5_000)
+                        sent = True
+                        break
+                if sent:
+                    break
+            except Exception:
+                continue
+        if not sent:
+            raise QrLoadFailed()
+        # 3) wait for the SMS code, enter and submit
+        await stage("awaiting_sms")
+        code = await wait_action("text", 240)
+        if not code:
+            raise LoginTimedOut()
+        await on_confirming(True)
+        code_input = None
+        for selector in ('input[placeholder*="验证码"]', 'input[inputmode*="numeric"]'):
+            try:
+                candidate = page.locator(selector).last
+                if await candidate.is_visible():
+                    code_input = candidate
+                    break
+            except Exception:
+                continue
+        if code_input is not None:
+            await code_input.click(timeout=5_000)
+        await page.keyboard.type(code)
+        await asyncio.sleep(1)
+        for label in ("验证并登录", "登录", "验证"):
+            try:
+                clicked = False
+                for button in await page.get_by_text(label, exact=True).all():
+                    if await button.is_visible():
+                        await button.click(timeout=5_000)
+                        clicked = True
+                        break
+                if clicked:
+                    break
+            except Exception:
+                continue
+        # 4) authenticated verdict via the account API, shape-agnostic
+        while loop.time() < deadline:
+            if cancelled():
+                raise ScanCancelled()
+            if await self._account_session_is_authenticated(prepared.context):
+                return
+            await asyncio.sleep(1.5)
+        raise LoginTimedOut()
 
     async def _discard_prepared(self) -> None:
         prepared = self._prepared

@@ -20,6 +20,7 @@
   const placeholderNode = document.querySelector("#scan-placeholder");
   const textNode = document.querySelector("#scan-text");
   const typeButton = document.querySelector("#scan-type");
+  const modeToggle = document.querySelector("#scan-mode-toggle");
   const phoneInput = document.querySelector("#scan-phone");
   const phoneButton = document.querySelector("#scan-phone-send");
   const phoneRow = document.querySelector("#scan-phone-row");
@@ -33,7 +34,7 @@
   let cancelPending = false;
   let preparedState = null;
   let preloadPromise = null;
-  let smsMode = false;
+  let smsMode = mobileView;
   let qrLoadedFor = null;
   let lastQrLoadAt = 0;
   const QR_REFRESH_MS = 15000;
@@ -351,7 +352,6 @@
       cancelPending = false;
       closeButton.disabled = false;
       renderState(state);
-      smsMode = false;
       return true;
     } catch (error) {
       cancelPending = false;
@@ -432,6 +432,33 @@
   }
 
   startButton.addEventListener("click", startScan);
+  // Primary binding mode follows the viewport: phones default to SMS-code
+  // login (their screen cannot be scanned by their own Douyin app), larger
+  // screens default to the QR flow. The toggle switches before starting.
+  function updateModeUi() {
+    if (smsMode) {
+      startButton.textContent = "手机号验证码绑定";
+      modeToggle.textContent = "更习惯扫码？改用扫码绑定（需另一台设备的屏幕）";
+    } else {
+      startButton.textContent = "扫码绑定抖音账号";
+      modeToggle.textContent = "手机在身边但没法扫码？改用短信验证码登录（无需第二台设备）";
+    }
+  }
+  async function toggleMode() {
+    if (startPending) return;
+    if (scanId && currentStatus && !TERMINAL.has(currentStatus)) {
+      const stopped = await cancelScan();
+      if (!stopped) return;
+    }
+    smsMode = !smsMode;
+    updateModeUi();
+    startScan();
+  }
+  modeToggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    toggleMode();
+  });
+  updateModeUi();
   // Warm intent: creating the session on hover/first touch lets the cloud
   // browser boot while the user is still moving toward the click, so the QR
   // is often ready the moment the dialog opens.
@@ -476,13 +503,3 @@
     }
   });
 })();
-
-// SMS-mode entry: start a binding session that logs in via phone + code.
-document.addEventListener("click", function (event) {
-  var trigger = event.target.closest ? event.target.closest("#scan-start-sms") : null;
-  if (!trigger) { return; }
-  event.preventDefault();
-  if (startPending) { return; }
-  smsMode = true;
-  startScan();
-});

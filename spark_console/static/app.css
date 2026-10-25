@@ -363,3 +363,8 @@ body.demo-gate-open{overflow:hidden}
   .scan-qr-crop{border-radius:14px;background:#fff;padding:10px;box-shadow:0 12px 35px rgba(20,30,55,.14)}
   .scan-qr{border-radius:10px}
 }
+
+/* Author display rules must never defeat the hidden attribute. */
+[hidden]{display:none!important}
+.scan-sms-entry{margin:14px 0 0;font-size:13px;color:var(--muted)}
+.scan-sms-entry a{color:var(--ember-dark);font-weight:700;text-decoration:underline;text-underline-offset:3px}
