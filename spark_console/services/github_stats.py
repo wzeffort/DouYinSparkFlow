@@ -18,7 +18,7 @@ def repo_url() -> str:
     return _REPO_URL
 
 
-def get_stats() -> dict:
+def get_github_stats() -> dict:
     now = time.monotonic()
     if now - _cache["at"] < _CACHE_TTL_SECONDS:
         return {
