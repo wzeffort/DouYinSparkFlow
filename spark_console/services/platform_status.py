@@ -90,15 +90,32 @@ def build_platform_status(
         )
         or 0
     )
-    attempted_total = int(
-        session.scalar(
-            select(func.count(TaskRunRecipient.id)).where(
-                TaskRunRecipient.status.in_(("success", "submitted", "failed", "uncertain"))
-            )
-        )
-        or 0
+    # Final-delivery stability: per (task, day, recipient), a day counts as
+    # delivered when any attempt that day ended delivered - retries and
+    # manual re-sends heal earlier failures instead of counting against it.
+    day_rows = session.execute(
+        select(
+            TaskRun.task_id,
+            TaskRun.scheduled_for,
+            TaskRunRecipient.position,
+            TaskRunRecipient.status,
+        ).join(TaskRun, TaskRunRecipient.run_id == TaskRun.id)
+    ).all()
+    outcomes: dict[tuple, set] = {}
+    for task_id, scheduled_for, position, status in day_rows:
+        day = scheduled_for.astimezone(SHANGHAI).date()
+        outcomes.setdefault((task_id, day, position), set()).add(status)
+    attempted_groups = len(outcomes)
+    delivered_groups = sum(
+        1
+        for statuses in outcomes.values()
+        if statuses & {"success", "submitted"}
     )
-    stability_rate = round(delivered_total / attempted_total * 100) if attempted_total else 0
+    stability_rate = (
+        round(delivered_groups / attempted_groups * 100)
+        if attempted_groups
+        else 0
+    )
     return PlatformStatus(
         total=len(task_ids),
         success=success,
