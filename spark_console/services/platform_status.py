@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from spark_console.models import SparkTask, TaskRun, TaskRunRecipient, WorkerLock
@@ -26,6 +26,7 @@ class PlatformStatus:
     updated_at: datetime
     delivered_total: int = 0
     stability_rate: int = 0
+    service_days: int = 0
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:
@@ -84,7 +85,7 @@ def build_platform_status(
     lease_until = _aware_utc(lock.lease_until) if lock else None
     delivered_total = int(
         session.scalar(
-            select(func.count(TaskRunRecipient.run_id)).where(
+            select(func.count(TaskRunRecipient.id)).where(
                 TaskRunRecipient.status.in_(("success", "submitted"))
             )
         )
@@ -116,6 +117,13 @@ def build_platform_status(
         if attempted_groups
         else 0
     )
+    delivered_days = {
+        key[1] for key, statuses in outcomes.items() if statuses & {"success", "submitted"}
+    }
+    service_days = 0
+    if delivered_days:
+        today = datetime.now(timezone.utc).astimezone(SHANGHAI).date()
+        service_days = (today - min(delivered_days)).days + 1
     return PlatformStatus(
         total=len(task_ids),
         success=success,
@@ -128,4 +136,5 @@ def build_platform_status(
         updated_at=current,
         delivered_total=delivered_total,
         stability_rate=stability_rate,
+        service_days=service_days,
     )

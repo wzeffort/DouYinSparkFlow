@@ -32,7 +32,7 @@ def _platform_status():
     return SimpleNamespace(
         total=12, success=9, confirmed=8, submitted=1, running=1,
         pending=1, failed=1, worker_online=True,
-        delivered_total=1334, stability_rate=98,
+        delivered_total=1334, stability_rate=98, service_days=60,
         updated_at=_at(0, 1, 5),
     )
 

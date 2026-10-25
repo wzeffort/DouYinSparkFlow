@@ -19,6 +19,7 @@
       <li><span aria-hidden="true">✓</span>Cookie 加密存储</li>
       <li><span aria-hidden="true">✓</span>逐条送达确认</li>
     </ul>
+    {% if platform and platform.delivered_total %}<p class="landing-proof"><b>已准时送达 {{ platform.delivered_total }}</b> 次 · 最终送达率 <b>{{ platform.stability_rate }}%</b> · 已稳定服务 <b>{{ platform.service_days }}</b> 天</p>{% endif %}
   </section>
 
   <section class="landing-grid">
