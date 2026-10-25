@@ -355,3 +355,23 @@ body.demo-gate-open{overflow:hidden}
 
 /* Hide the browser-native password reveal where our own toggle exists. */
 .password-field input::-ms-reveal,.password-field input::-ms-clear{display:none}
+
+/* Mobile QR display: square frame, height-auto image (cannot crop). */
+@media(max-width:760px){
+  .scan-frame{aspect-ratio:1/1;overflow:visible}
+  .scan-qr,.scan-qr-crop{display:block;width:100%;height:auto;object-fit:contain;margin:0;padding:0;background:transparent;box-shadow:none;border-radius:0}
+  .scan-qr-crop{border-radius:14px;background:#fff;padding:10px;box-shadow:0 12px 35px rgba(20,30,55,.14)}
+  .scan-qr{border-radius:10px}
+}
+
+/* Author display rules must never defeat the hidden attribute. */
+[hidden]{display:none!important}
+.scan-sms-entry{margin:14px 0 0;font-size:13px;color:var(--muted)}
+.scan-sms-entry a{color:var(--ember-dark);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+
+.daily-alltime{margin-left:16px;color:#9aa7bd;font-size:12px}
+.daily-alltime b{color:#e8edf5;font-variant-numeric:tabular-nums}
+
+.daily-github{display:inline-flex;align-items:center;gap:5px;margin-left:14px;padding:5px 12px;border:1px solid #3a465c;border-radius:999px;color:#d7deea;font-size:12px;font-weight:700;text-decoration:none;transition:.18s ease}
+.daily-github:hover{border-color:#f36552;color:#fff}
+.daily-note{display:block;margin-top:8px;color:#8794a9;font-size:11px}

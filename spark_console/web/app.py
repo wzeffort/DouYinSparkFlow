@@ -63,6 +63,7 @@ from spark_console.web.announcement_routes import build_announcement_router
 from spark_console.web.retry_routes import build_retry_router
 from spark_console.web.recipient_review_routes import build_recipient_review_router
 from spark_console.services.user_directory import UserDirectoryService
+from spark_console.services.github_stats import get_github_stats
 from spark_console.web.registration_routes import registration_client_key
 from spark_console.web.security_headers import SecurityBoundaryMiddleware
 from spark_console.web.renewal_routes import build_renewal_router
@@ -533,11 +534,20 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 else:
                     return RedirectResponse("/dashboard", status_code=303)
         # Anonymous visitors get a public product page instead of a
-        # bare login wall.
+        # bare login wall. Lifetime stats decorate it, but the landing must
+        # render even when the database is unreachable.
+        platform = None
+        try:
+            with session_scope(engine) as db:
+                platform = build_platform_status(db)
+        except Exception:
+            platform = None
         return page(
             request, "landing.html",
             title="让每天的问候准时抵达",
             nav=False, landing=True,
+            platform=platform,
+            github_stats=get_github_stats(),
         )
 
     @app.get("/robots.txt")
@@ -753,6 +763,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 accounts=accounts,
                 runs=runs,
                 platform_status=build_platform_status(db),
+                github_stats=get_github_stats(),
                 **context,
             )
 
@@ -765,6 +776,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "confirmed": status.confirmed, "submitted": status.submitted,
                 "running": status.running, "pending": status.pending,
                 "failed": status.failed, "worker_online": status.worker_online,
+                "delivered_total": status.delivered_total, "stability_rate": status.stability_rate, "service_days": status.service_days,
                 "updated_at": status.updated_at.isoformat(),
             }
         with session_scope(engine) as db:
@@ -780,6 +792,9 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "pending": status.pending,
                 "failed": status.failed,
                 "worker_online": status.worker_online,
+                "delivered_total": status.delivered_total,
+                "stability_rate": status.stability_rate,
+                "service_days": status.service_days,
                 "updated_at": status.updated_at.isoformat(),
             }
 

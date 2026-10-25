@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from spark_console.models import SparkTask, TaskRun, TaskRunRecipient, WorkerLock
@@ -24,6 +24,9 @@ class PlatformStatus:
     failed: int
     worker_online: bool
     updated_at: datetime
+    delivered_total: int = 0
+    stability_rate: int = 0
+    service_days: int = 0
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:
@@ -60,6 +63,32 @@ def build_platform_status(
         task_ids.add(run.task_id)
         latest_by_task.setdefault(run.task_id, run)
 
+    delivered_today = set()
+    run_positions = {}
+    for task_id, position, status, run_id in session.execute(
+        select(
+            TaskRun.task_id,
+            TaskRunRecipient.position,
+            TaskRunRecipient.status,
+            TaskRunRecipient.run_id,
+        )
+        .join(TaskRun, TaskRunRecipient.run_id == TaskRun.id)
+        .where(
+            TaskRun.scheduled_for >= start,
+            TaskRun.scheduled_for < end,
+        )
+    ).all():
+        if status in ("success", "submitted"):
+            delivered_today.add((task_id, position))
+        entry = run_positions.setdefault(run_id, [task_id, []])
+        entry[1].append(position)
+
+    def run_recovered(run) -> bool:
+        task_id, positions = run_positions.get(run.id, (None, []))
+        return bool(positions) and all(
+            (task_id, position) in delivered_today for position in positions
+        )
+
     latest_ids = [run.id for run in latest_by_task.values()]
     unconfirmed_ids = set(session.scalars(select(TaskRunRecipient.run_id).where(
         TaskRunRecipient.run_id.in_(latest_ids),
@@ -76,10 +105,55 @@ def build_platform_status(
         elif run.status == "running":
             running += 1
         elif run.status in {"failed", "skipped", "partial"}:
-            failed += 1
+            if run_recovered(run):
+                success += 1
+                confirmed += 1
+            else:
+                failed += 1
     pending = len(task_ids) - success - running - failed
     lock = session.get(WorkerLock, 1)
     lease_until = _aware_utc(lock.lease_until) if lock else None
+    delivered_total = int(
+        session.scalar(
+            select(func.count(TaskRunRecipient.run_id)).where(
+                TaskRunRecipient.status.in_(("success", "submitted"))
+            )
+        )
+        or 0
+    )
+    # Final-delivery stability: per (task, day, recipient), a day counts as
+    # delivered when any attempt that day ended delivered - retries and
+    # manual re-sends heal earlier failures instead of counting against it.
+    day_rows = session.execute(
+        select(
+            TaskRun.task_id,
+            TaskRun.scheduled_for,
+            TaskRunRecipient.position,
+            TaskRunRecipient.status,
+        ).join(TaskRun, TaskRunRecipient.run_id == TaskRun.id)
+    ).all()
+    outcomes: dict[tuple, set] = {}
+    for task_id, scheduled_for, position, status in day_rows:
+        day = scheduled_for.astimezone(SHANGHAI).date()
+        outcomes.setdefault((task_id, day, position), set()).add(status)
+    attempted_groups = len(outcomes)
+    delivered_groups = sum(
+        1
+        for statuses in outcomes.values()
+        if statuses & {"success", "submitted"}
+    )
+    stability_rate = (
+        round(delivered_groups / attempted_groups * 100)
+        if attempted_groups
+        else 0
+    )
+    delivered_days = {
+        key[1] for key, statuses in outcomes.items() if statuses & {"success", "submitted"}
+    }
+    service_days = 0
+    if delivered_days:
+        today = datetime.now(timezone.utc).astimezone(SHANGHAI).date()
+        service_days = (today - min(delivered_days)).days + 1
     return PlatformStatus(
         total=len(task_ids),
         success=success,
@@ -90,4 +164,7 @@ def build_platform_status(
         failed=failed,
         worker_online=bool(lease_until and lease_until > current),
         updated_at=current,
+        delivered_total=delivered_total,
+        stability_rate=stability_rate,
+        service_days=service_days,
     )

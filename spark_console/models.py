@@ -160,6 +160,8 @@ class ScanStatus(StrEnum):
     QUEUED = "queued"
     LOADING_QR = "loading_qr"
     AWAITING_SCAN = "awaiting_scan"
+    AWAITING_PHONE = "awaiting_phone"
+    AWAITING_SMS = "awaiting_sms"
     CONFIRMING = "confirming"
     SUCCEEDED = "succeeded"
     FAILED = "failed"
@@ -201,6 +203,7 @@ class DouyinLoginSession(Base):
     owner_user_id: Mapped[str] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"), index=True)
     slot: Mapped[str | None] = mapped_column(String(16), unique=True)
     status: Mapped[str] = mapped_column(String(24), nullable=False, default=ScanStatus.QUEUED)
+    login_mode: Mapped[str] = mapped_column(String(8), nullable=False, default="qr")
     qr_png: Mapped[bytes | None] = mapped_column(LargeBinary)
     qr_crop_png: Mapped[bytes | None] = mapped_column(LargeBinary)
     account_id: Mapped[str | None] = mapped_column(ForeignKey("douyin_accounts.id", ondelete="SET NULL"))
@@ -232,6 +235,7 @@ class DouyinLoginInput(Base):
     scan_id: Mapped[str] = mapped_column(
         ForeignKey("douyin_login_sessions.id", ondelete="CASCADE"), index=True
     )
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="text")
     ciphertext: Mapped[bytes | None] = mapped_column(LargeBinary)
     nonce: Mapped[bytes | None] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

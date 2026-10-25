@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import json
+import traceback
 import os
 import signal
 import time
@@ -44,7 +46,7 @@ class AuthWorker:
     def __init__(self, settings: Settings, engine, scanner=None):
         self.settings = settings
         self.engine = engine
-        self.scanner = scanner or DouyinQrScanner()
+        self.scanner = scanner or DouyinQrScanner(offload_callbacks=True)
         key = bytearray(settings.cookie_key_file.read_bytes())
         try:
             self.cipher = CookieCipher(bytes(key))
@@ -78,15 +80,20 @@ class AuthWorker:
         if callable(close):
             await close()
 
-    async def run_once(self, stopping: asyncio.Event | None = None) -> bool:
+    async def run_once(self, stopping: asyncio.Event | None = None, scans_only: bool = False) -> bool:
         with session_scope(self.engine) as db:
             scan = ScanSessionService(db).claim_next()
             if scan is not None:
                 scan_id = scan.id
                 owner_id = scan.owner_user_id
                 expires_at = scan.expires_at
+                login_mode = (getattr(scan, "login_mode", "") or "qr")
 
         if scan is None:
+            if scans_only:
+                # Warm keep-alive mode: never start a second browser for a
+                # background sync while a prepared binding page is held.
+                return False
             from spark_console.contact_sync import run_contact_sync
             return await run_contact_sync(self.settings, self.engine, stopping=stopping)
 
@@ -131,6 +138,8 @@ class AuthWorker:
                 expires_at=expires_at,
                 on_view=on_view,
                 next_interaction=next_interaction,
+                on_stage=on_stage,
+                login_mode=login_mode,
             )
             if stopping is not None and stopping.is_set():
                 raise ScanCancelled()
@@ -174,7 +183,21 @@ class AuthWorker:
             code = ERROR_CODES[type(error)]
         except (_CredentialInvalid, ValidationError):
             code = "credential_invalid"
-        except Exception:
+        except Exception as error:
+            # Never persist exception messages, locals, cookies, QR data or SMS input.
+            record = {
+                "session_id": scan_id,
+                "error_type": type(error).__name__,
+                "frames": [{"function": frame.name, "line": frame.lineno}
+                           for frame in traceback.extract_tb(error.__traceback__)],
+                "duration_ms": round((time.monotonic() - scan_started) * 1000),
+            }
+            try:
+                temporary = self.settings.data_dir / "auth-failure.json.tmp"
+                temporary.write_text(json.dumps(record), encoding="utf-8")
+                temporary.replace(self.settings.data_dir / "auth-failure.json")
+            except OSError:
+                logger.warning("auth failure diagnostic unavailable")
             code = "automation_failed"
         finally:
             if isinstance(storage_state, dict):

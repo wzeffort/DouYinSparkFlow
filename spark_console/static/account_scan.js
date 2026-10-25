@@ -20,6 +20,11 @@
   const placeholderNode = document.querySelector("#scan-placeholder");
   const textNode = document.querySelector("#scan-text");
   const typeButton = document.querySelector("#scan-type");
+  const modeToggle = document.querySelector("#scan-mode-toggle");
+  const phoneInput = document.querySelector("#scan-phone");
+  const phoneButton = document.querySelector("#scan-phone-send");
+  const phoneRow = document.querySelector("#scan-phone-row");
+  const smsHint = document.querySelector(".scan-sms-hint");
 
   let scanId = null;
   let currentStatus = null;
@@ -29,14 +34,16 @@
   let cancelPending = false;
   let preparedState = null;
   let preloadPromise = null;
+  let smsMode = mobileView;
   let qrLoadedFor = null;
   let lastQrLoadAt = 0;
   const QR_REFRESH_MS = 15000;
 
   function pollDelay() {
     // Poll fast while the cloud browser is still booting; once the QR is on
-    // screen the status rarely changes and 1s keeps the page responsive.
-    return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1000 : 500;
+    // screen the status rarely changes and 1.2s keeps the page responsive.
+    // Both floors stay under the server's per-minute status limit.
+    return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1200 : 700;
   }
   const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
 
@@ -95,10 +102,17 @@
     if (browserActive) {
       loadQrOnce(scanId);
     }
+    if (state.login_mode === "sms") {
+      applySmsSteps(state.status);
+    }
+    const phoneStage = state.status === "awaiting_phone";
+    phoneRow.hidden = !phoneStage;
+    smsHint.hidden = phoneStage;
+    const smsStage = state.status === "awaiting_sms";
     const terminal = TERMINAL.has(state.status);
-    textNode.disabled = terminal;
-    typeButton.disabled = terminal;
-    setBusy(!terminal);
+    textNode.disabled = terminal || !smsStage;
+    typeButton.disabled = terminal || !smsStage;
+    setBusy(terminal ? false : !phoneStage && !smsStage && state.status !== "awaiting_scan");
     cancelButton.disabled = terminal;
     if (state.status === "succeeded") {
       showMessage("登录成功，正在刷新账号列表", 0);
@@ -110,6 +124,51 @@
       }, 900);
     }
     return terminal;
+  }
+
+  function applySmsSteps(status) {
+    const labels = ["创建绑定会话", "打开抖音登录页", "输入手机号", "输入验证码确认"];
+    const activeByStatus = {
+      queued: "queued",
+      loading_qr: "loading_qr",
+      awaiting_phone: "awaiting_scan",
+      awaiting_sms: "confirming",
+      confirming: "confirming",
+      succeeded: "succeeded",
+    };
+    document.querySelectorAll(".scan-progress li").forEach((li, index) => {
+      const span = li.querySelector("span");
+      if (span) span.textContent = labels[index];
+    });
+    if (status in activeByStatus) {
+      dialog.dataset.status = activeByStatus[status];
+    }
+  }
+
+  async function sendPhone() {
+    if (!scanId || TERMINAL.has(currentStatus)) return;
+    const value = phoneInput.value.trim();
+    if (!/^1\d{10}$/.test(value)) {
+      showMessage("请输入 11 位手机号码", 0);
+      phoneInput.focus();
+      return;
+    }
+    phoneButton.disabled = true;
+    try {
+      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}/interact`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({csrf_token: csrfToken, kind: "phone", text: value}),
+      });
+      const body = await readJson(response);
+      showMessage(body.message || "验证码发送中，请留意短信", 0);
+      phoneButton.disabled = false;
+      timer = window.setTimeout(pollScan, 800);
+    } catch (error) {
+      phoneButton.disabled = false;
+      showMessage(error.message || "发送失败，请重试", 0);
+    }
   }
 
   async function pollPrepared() {
@@ -151,7 +210,7 @@
         method: "POST",
         credentials: "same-origin",
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-        body: new URLSearchParams({csrf_token: csrfToken}),
+        body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
       });
       const state = await readJson(response);
       scanId = state.id;
@@ -240,7 +299,7 @@
         method: "POST",
         credentials: "same-origin",
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-        body: new URLSearchParams({csrf_token: csrfToken}),
+        body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
       });
       const state = await readJson(response);
       scanId = state.id;
@@ -286,7 +345,7 @@
           method: "POST",
           credentials: "same-origin",
           headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-          body: new URLSearchParams({csrf_token: csrfToken}),
+          body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
         },
       );
       const state = await readJson(response);
@@ -373,6 +432,33 @@
   }
 
   startButton.addEventListener("click", startScan);
+  // Primary binding mode follows the viewport: phones default to SMS-code
+  // login (their screen cannot be scanned by their own Douyin app), larger
+  // screens default to the QR flow. The toggle switches before starting.
+  function updateModeUi() {
+    if (smsMode) {
+      startButton.textContent = "手机号验证码绑定";
+      modeToggle.textContent = "更习惯扫码？改用扫码绑定（需另一台设备的屏幕）";
+    } else {
+      startButton.textContent = "扫码绑定抖音账号";
+      modeToggle.textContent = "手机在身边但没法扫码？改用短信验证码登录（无需第二台设备）";
+    }
+  }
+  async function toggleMode() {
+    if (startPending) return;
+    if (scanId && currentStatus && !TERMINAL.has(currentStatus)) {
+      const stopped = await cancelScan();
+      if (!stopped) return;
+    }
+    smsMode = !smsMode;
+    updateModeUi();
+    startScan();
+  }
+  modeToggle.addEventListener("click", (event) => {
+    event.preventDefault();
+    toggleMode();
+  });
+  updateModeUi();
   // Warm intent: creating the session on hover/first touch lets the cloud
   // browser boot while the user is still moving toward the click, so the QR
   // is often ready the moment the dialog opens.
@@ -389,6 +475,13 @@
   cancelButton.addEventListener("click", () => requestClose(false));
   qrNode.addEventListener("click", forwardBrowserClick);
   typeButton.addEventListener("click", sendBrowserText);
+  phoneButton.addEventListener("click", sendPhone);
+  phoneInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendPhone();
+    }
+  });
   textNode.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -399,13 +492,14 @@
     event.preventDefault();
     requestClose(true);
   });
-  window.addEventListener("pagehide", () => {
-    if (!scanId || TERMINAL.has(currentStatus)) return;
-    clearTimer();
-    navigator.sendBeacon(
-      `/accounts/scan/${encodeURIComponent(scanId)}/cancel`,
-      new URLSearchParams({csrf_token: csrfToken}),
-    );
-    scanId = null;
+  // Mobile app switches suspend timers and may fire pagehide; cancelling the
+  // session there killed the QR the moment the user left to open the Douyin
+  // app. Abandoned sessions are reclaimed server-side by their own TTL, so
+  // returning users just resume polling where they left off.
+  window.addEventListener("pageshow", () => {
+    if (scanId && currentStatus && !TERMINAL.has(currentStatus)) {
+      clearTimer();
+      timer = window.setTimeout(pollScan, 300);
+    }
   });
 })();

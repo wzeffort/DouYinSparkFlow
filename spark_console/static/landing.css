@@ -39,3 +39,8 @@
 .landing-foot a:hover{color:var(--ink)}
 @media(max-width:640px){.landing{padding:0 16px 48px}.landing-top .brand small{display:none}.landing-actions .big{flex:1 1 auto}}
 @media (prefers-reduced-motion:reduce){.landing-grid article,.landing-cta{transition:none}.landing-grid article:hover,.landing-cta:hover{transform:none}}
+
+.landing-proof{display:inline-flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin:26px 0 0;padding:12px 18px;border:1px solid #e7d9cf;border-radius:14px;background:linear-gradient(145deg,#fffaf6,#fff6f1);color:#5c5148;font-size:13.5px;font-weight:600}
+.landing-proof b{color:#c2452f;font-size:15px;font-variant-numeric:tabular-nums}
+
+.landing-proof a{color:#c2452f;text-decoration:none;border-bottom:1px dotted #d8b7a9}
