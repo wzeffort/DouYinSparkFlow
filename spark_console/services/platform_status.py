@@ -85,7 +85,7 @@ def build_platform_status(
     lease_until = _aware_utc(lock.lease_until) if lock else None
     delivered_total = int(
         session.scalar(
-            select(func.count(TaskRunRecipient.run_id)).where(
+            select(func.count(TaskRunRecipient.id)).where(
                 TaskRunRecipient.status.in_(("success", "submitted"))
             )
         )
