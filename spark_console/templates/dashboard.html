@@ -2,7 +2,7 @@
 <header class="page-head compact-page-head"><div><h1>今日概览</h1><p>查看今日任务进度与账号状态</p></div><a class="button" href="/tasks">新建续火任务</a></header>
 
 <section class="daily-overview" data-platform-root data-platform-total="{{ platform_status.total }}" data-platform-success="{{ platform_status.success }}" data-platform-running="{{ platform_status.running }}" data-platform-pending="{{ platform_status.pending }}" data-platform-failed="{{ platform_status.failed }}">
-  <div class="daily-overview-head"><div><h2>全站今日任务</h2><span class="daily-total"><b data-platform-value="total">{{ platform_status.total }}</b> 个任务</span></div><div class="daily-health {{ 'online' if platform_status.worker_online else 'offline' }}" data-platform-health><i aria-hidden="true"></i><span data-platform-health-label>{{ '执行器正常' if platform_status.worker_online else '执行器离线' }}</span></div></div>
+  <div class="daily-overview-head"><div><h2>全站今日任务</h2><span class="daily-total"><b data-platform-value="total">{{ platform_status.total }}</b> 个任务</span><span class="daily-alltime">累计送达 <b data-platform-value="delivered_total">{{ platform_status.delivered_total }}</b> 次 · 稳定率 <b data-platform-value="stability_rate">{{ platform_status.stability_rate }}%</b></span></div><div class="daily-health {{ 'online' if platform_status.worker_online else 'offline' }}" data-platform-health><i aria-hidden="true"></i><span data-platform-health-label>{{ '执行器正常' if platform_status.worker_online else '执行器离线' }}</span></div></div>
   <div class="daily-console">
   {% set percent = (platform_status.success / platform_status.total * 100)|round|int if platform_status.total else 0 %}
   <div class="daily-orbit" data-platform-orbit style="--progress:{{ percent }}%"><div><span>今日完成率</span><strong><b data-platform-percent>{{ percent }}</b><small>%</small></strong><span>发送任务进度</span></div></div>
@@ -20,7 +20,7 @@
 
 <section class="stats"><article><span>我的启用任务</span><strong>{{ tasks|selectattr('enabled')|list|length }}</strong><small>共 {{ tasks|length }} 个任务</small></article><article><span>已绑定账号</span><strong>{{ accounts|length }}</strong><small>登录凭据加密存储</small></article><article><span>我的最近执行</span><strong>{{ runs|length }}</strong><small>仅显示脱敏状态</small></article></section>
 <section class="panel"><div class="panel-head"><div><h2>我的每日任务</h2><p>任务至少间隔四分钟执行，避免多个浏览器互相干扰</p></div></div>
-{% if tasks %}<div class="task-list">{% for task in tasks %}<article class="task-row"><div class="time">{{ task.send_time }}</div><div><strong>{{ task.target_name }}</strong><p>{{ task.message_template }}</p></div><span class="pill {{ 'good' if task.enabled else 'off' }}">{{ '已启用' if task.enabled else '已暂停' }}</span></article>{% endfor %}</div>{% else %}<div class="empty"><span>✦</span><h3>还没有续火任务</h3><p>先绑定抖音账号，再设置好友、时间和消息。</p><a class="button" href="/accounts">开始绑定账号</a></div>{% endif %}</section>
+{% if tasks %}<div class="task-list">{% for task in tasks %}<article class="task-row"><div class="time">{{ task.send_time }}</div><div><strong>{{ task.target_name }}</strong><p>{{ task.message_template|message_content }}</p></div><span class="pill {{ 'good' if task.enabled else 'off' }}">{{ '已启用' if task.enabled else '已暂停' }}</span></article>{% endfor %}</div>{% else %}<div class="empty"><span>✦</span><h3>还没有续火任务</h3><p>先绑定抖音账号，再设置好友、时间和消息。</p><a class="button" href="/accounts">开始绑定账号</a></div>{% endif %}</section>
 <script defer src="/static/dashboard.js?v=20260907-companion2"></script>
 <script defer src="/static/spark_companion.js?v=20260907-companion2"></script>
 {% endblock %}

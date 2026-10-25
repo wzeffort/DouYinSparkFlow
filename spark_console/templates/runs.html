@@ -37,7 +37,7 @@
           <ul class="batch-task-summary">{% for item in recipient_results[run.id] %}
             {% set content = message_contents.get(run.id, {}).get(item.position) if message_contents else none %}
             <li><strong>{{ item.target_name }}</strong> <span class="pill">{{ '成功（页面确认）' if item.status == 'success' and item.stage == 'page_confirmed' else {'pending':'待执行','sending':'发送中','success':'服务端已接受','submitted':'已提交，回执未知','uncertain':'待核实','failed':'未完成'}.get(item.status, item.status) }}</span>
-              <p>{{ content.text if content else item.message_template }}</p>
+              <p>{{ content.text if content else (item.message_template|message_content) }}</p>
               {% if content %}<small>内容来源：{{ content.source }} · 重试沿用本条内容</small>{% if content.receipt_json %}<details><summary>发送回执诊断</summary><pre>{{ content.receipt_json }}</pre><small>服务端接受不代表对方已读；未知结果不自动重发。</small></details>{% endif %}{% endif %}
               {% if item.error_summary %}<p><small>{{ item.error_summary }}</small></p>{% endif %}
               <p><a href="/runs/{{ run.id }}/recipients/{{ item.position }}/review">查看名称诊断{% if item.status == 'failed' %} / 补跑{% endif %}</a></p>

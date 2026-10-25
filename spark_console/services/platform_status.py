@@ -24,6 +24,8 @@ class PlatformStatus:
     failed: int
     worker_online: bool
     updated_at: datetime
+    delivered_total: int = 0
+    stability_rate: int = 0
 
 
 def _aware_utc(value: datetime | None) -> datetime | None:
@@ -80,6 +82,23 @@ def build_platform_status(
     pending = len(task_ids) - success - running - failed
     lock = session.get(WorkerLock, 1)
     lease_until = _aware_utc(lock.lease_until) if lock else None
+    delivered_total = int(
+        session.scalar(
+            select(func.count(TaskRunRecipient.id)).where(
+                TaskRunRecipient.status.in_(("success", "submitted"))
+            )
+        )
+        or 0
+    )
+    attempted_total = int(
+        session.scalar(
+            select(func.count(TaskRunRecipient.id)).where(
+                TaskRunRecipient.status.in_(("success", "submitted", "failed", "uncertain"))
+            )
+        )
+        or 0
+    )
+    stability_rate = round(delivered_total / attempted_total * 100) if attempted_total else 0
     return PlatformStatus(
         total=len(task_ids),
         success=success,
@@ -90,4 +109,6 @@ def build_platform_status(
         failed=failed,
         worker_online=bool(lease_until and lease_until > current),
         updated_at=current,
+        delivered_total=delivered_total,
+        stability_rate=stability_rate,
     )

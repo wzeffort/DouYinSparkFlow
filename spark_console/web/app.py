@@ -765,6 +765,7 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "confirmed": status.confirmed, "submitted": status.submitted,
                 "running": status.running, "pending": status.pending,
                 "failed": status.failed, "worker_online": status.worker_online,
+                "delivered_total": status.delivered_total, "stability_rate": status.stability_rate,
                 "updated_at": status.updated_at.isoformat(),
             }
         with session_scope(engine) as db:
@@ -780,6 +781,8 @@ def create_app(settings: Settings, engine: Engine) -> FastAPI:
                 "pending": status.pending,
                 "failed": status.failed,
                 "worker_online": status.worker_online,
+                "delivered_total": status.delivered_total,
+                "stability_rate": status.stability_rate,
                 "updated_at": status.updated_at.isoformat(),
             }
 

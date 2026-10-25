@@ -368,3 +368,6 @@ body.demo-gate-open{overflow:hidden}
 [hidden]{display:none!important}
 .scan-sms-entry{margin:14px 0 0;font-size:13px;color:var(--muted)}
 .scan-sms-entry a{color:var(--ember-dark);font-weight:700;text-decoration:underline;text-underline-offset:3px}
+
+.daily-alltime{margin-left:16px;color:#9aa7bd;font-size:12px}
+.daily-alltime b{color:#e8edf5;font-variant-numeric:tabular-nums}
