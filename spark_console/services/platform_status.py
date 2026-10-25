@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from spark_console.models import SparkTask, TaskRun, TaskRunRecipient, WorkerLock
@@ -85,7 +85,7 @@ def build_platform_status(
     lease_until = _aware_utc(lock.lease_until) if lock else None
     delivered_total = int(
         session.scalar(
-            select(func.count(TaskRunRecipient.id)).where(
+            select(func.count(TaskRunRecipient.run_id)).where(
                 TaskRunRecipient.status.in_(("success", "submitted"))
             )
         )
