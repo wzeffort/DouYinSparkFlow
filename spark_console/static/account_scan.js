@@ -35,8 +35,9 @@
 
   function pollDelay() {
     // Poll fast while the cloud browser is still booting; once the QR is on
-    // screen the status rarely changes and 1s keeps the page responsive.
-    return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1000 : 500;
+    // screen the status rarely changes and 1.2s keeps the page responsive.
+    // Both floors stay under the server's per-minute status limit.
+    return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1200 : 700;
   }
   const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
 
@@ -399,13 +400,14 @@
     event.preventDefault();
     requestClose(true);
   });
-  window.addEventListener("pagehide", () => {
-    if (!scanId || TERMINAL.has(currentStatus)) return;
-    clearTimer();
-    navigator.sendBeacon(
-      `/accounts/scan/${encodeURIComponent(scanId)}/cancel`,
-      new URLSearchParams({csrf_token: csrfToken}),
-    );
-    scanId = null;
+  // Mobile app switches suspend timers and may fire pagehide; cancelling the
+  // session there killed the QR the moment the user left to open the Douyin
+  // app. Abandoned sessions are reclaimed server-side by their own TTL, so
+  // returning users just resume polling where they left off.
+  window.addEventListener("pageshow", () => {
+    if (scanId && currentStatus && !TERMINAL.has(currentStatus)) {
+      clearTimer();
+      timer = window.setTimeout(pollScan, 300);
+    }
   });
 })();

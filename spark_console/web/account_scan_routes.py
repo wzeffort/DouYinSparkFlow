@@ -18,9 +18,11 @@ from spark_console.web.auth import WebAuth
 
 
 NO_STORE = {"Cache-Control": "no-store"}
-START_LIMIT = 5
-STATUS_LIMIT = 40
-QR_LIMIT = 40
+# Client polling floors are 700ms/1200ms per user; keep the per-minute
+# limits comfortably above them so slow cloud-browser boots never 429.
+START_LIMIT = 8
+STATUS_LIMIT = 120
+QR_LIMIT = 80
 CANCEL_LIMIT = 10
 INTERACT_LIMIT = 120
 
