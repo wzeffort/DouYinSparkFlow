@@ -371,3 +371,7 @@ body.demo-gate-open{overflow:hidden}
 
 .daily-alltime{margin-left:16px;color:#9aa7bd;font-size:12px}
 .daily-alltime b{color:#e8edf5;font-variant-numeric:tabular-nums}
+
+.daily-github{display:inline-flex;align-items:center;gap:5px;margin-left:14px;padding:5px 12px;border:1px solid #3a465c;border-radius:999px;color:#d7deea;font-size:12px;font-weight:700;text-decoration:none;transition:.18s ease}
+.daily-github:hover{border-color:#f36552;color:#fff}
+.daily-note{display:block;margin-top:8px;color:#8794a9;font-size:11px}
