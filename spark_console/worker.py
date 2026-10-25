@@ -249,9 +249,51 @@ class Worker:
                 )
             return finished
 
+    def _enrich_recipient_sec_uids(self, recipients, task_id, account_id):
+        # Recipients created before sec_uid capture rely on nickname search,
+        # which times out for emoji and special-character names. The contact
+        # identity store already knows each friend's sec_uid; resolve and
+        # persist it once so the executor always navigates directly. Search
+        # stays as the fallback when no unique identity exists.
+        pending = [r for r in recipients if not r.get("target_sec_uid")]
+        if not pending:
+            return
+        from spark_console.models import DouyinContactIdentity, SparkTaskRecipient
+        try:
+            with session_scope(self.engine) as db:
+                for recipient in pending:
+                    name = (recipient.get("target_name") or "").strip()
+                    if not name:
+                        continue
+                    identities = db.scalars(
+                        select(DouyinContactIdentity).where(
+                            DouyinContactIdentity.account_id == account_id,
+                            DouyinContactIdentity.nickname == name,
+                        )
+                    ).all()
+                    if not identities:
+                        identities = db.scalars(
+                            select(DouyinContactIdentity).where(
+                                DouyinContactIdentity.account_id == account_id,
+                                DouyinContactIdentity.remark_name == name,
+                            )
+                        ).all()
+                    sec_uids = {i.sec_uid for i in identities if i.sec_uid}
+                    if len(sec_uids) != 1:
+                        continue
+                    sec_uid = sec_uids.pop()
+                    recipient["target_sec_uid"] = sec_uid
+                    row = db.get(SparkTaskRecipient, (task_id, recipient["position"]))
+                    if row is not None and not row.target_sec_uid:
+                        row.target_sec_uid = sec_uid
+        except Exception:
+            # Enrichment is an optimisation; search remains the safe fallback.
+            pass
+
     async def _run_batch(self, run_id, task_id, account_id, cookies, credential_version, recipients, now):
         from spark_console.message_content import render_content, parse_content
         from spark_console.models import RunMessageContent, TaskRunRecipient
+        self._enrich_recipient_sec_uids(recipients, task_id, account_id)
         # Resolve external content once, outside a DB write transaction and before
         # opening the browser. The committed text is reused by all retry paths.
         for recipient in recipients:
