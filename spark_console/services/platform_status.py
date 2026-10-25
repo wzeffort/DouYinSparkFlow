@@ -63,6 +63,32 @@ def build_platform_status(
         task_ids.add(run.task_id)
         latest_by_task.setdefault(run.task_id, run)
 
+    delivered_today = set()
+    run_positions = {}
+    for task_id, position, status, run_id in session.execute(
+        select(
+            TaskRun.task_id,
+            TaskRunRecipient.position,
+            TaskRunRecipient.status,
+            TaskRunRecipient.run_id,
+        )
+        .join(TaskRun, TaskRunRecipient.run_id == TaskRun.id)
+        .where(
+            TaskRun.scheduled_for >= start,
+            TaskRun.scheduled_for < end,
+        )
+    ).all():
+        if status in ("success", "submitted"):
+            delivered_today.add((task_id, position))
+        entry = run_positions.setdefault(run_id, [task_id, []])
+        entry[1].append(position)
+
+    def run_recovered(run) -> bool:
+        task_id, positions = run_positions.get(run.id, (None, []))
+        return bool(positions) and all(
+            (task_id, position) in delivered_today for position in positions
+        )
+
     latest_ids = [run.id for run in latest_by_task.values()]
     unconfirmed_ids = set(session.scalars(select(TaskRunRecipient.run_id).where(
         TaskRunRecipient.run_id.in_(latest_ids),
@@ -79,7 +105,11 @@ def build_platform_status(
         elif run.status == "running":
             running += 1
         elif run.status in {"failed", "skipped", "partial"}:
-            failed += 1
+            if run_recovered(run):
+                success += 1
+                confirmed += 1
+            else:
+                failed += 1
     pending = len(task_ids) - success - running - failed
     lock = session.get(WorkerLock, 1)
     lease_until = _aware_utc(lock.lease_until) if lock else None
