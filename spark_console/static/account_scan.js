@@ -20,6 +20,10 @@
   const placeholderNode = document.querySelector("#scan-placeholder");
   const textNode = document.querySelector("#scan-text");
   const typeButton = document.querySelector("#scan-type");
+  const phoneInput = document.querySelector("#scan-phone");
+  const phoneButton = document.querySelector("#scan-phone-send");
+  const phoneRow = document.querySelector("#scan-phone-row");
+  const smsHint = document.querySelector(".scan-sms-hint");
 
   let scanId = null;
   let currentStatus = null;
@@ -29,6 +33,7 @@
   let cancelPending = false;
   let preparedState = null;
   let preloadPromise = null;
+  let smsMode = false;
   let qrLoadedFor = null;
   let lastQrLoadAt = 0;
   const QR_REFRESH_MS = 15000;
@@ -96,10 +101,17 @@
     if (browserActive) {
       loadQrOnce(scanId);
     }
+    if (state.login_mode === "sms") {
+      applySmsSteps(state.status);
+    }
+    const phoneStage = state.status === "awaiting_phone";
+    phoneRow.hidden = !phoneStage;
+    smsHint.hidden = phoneStage;
+    const smsStage = state.status === "awaiting_sms";
     const terminal = TERMINAL.has(state.status);
-    textNode.disabled = terminal;
-    typeButton.disabled = terminal;
-    setBusy(!terminal);
+    textNode.disabled = terminal || !smsStage;
+    typeButton.disabled = terminal || !smsStage;
+    setBusy(terminal ? false : !phoneStage && !smsStage && state.status !== "awaiting_scan");
     cancelButton.disabled = terminal;
     if (state.status === "succeeded") {
       showMessage("登录成功，正在刷新账号列表", 0);
@@ -111,6 +123,51 @@
       }, 900);
     }
     return terminal;
+  }
+
+  function applySmsSteps(status) {
+    const labels = ["创建绑定会话", "打开抖音登录页", "输入手机号", "输入验证码确认"];
+    const activeByStatus = {
+      queued: "queued",
+      loading_qr: "loading_qr",
+      awaiting_phone: "awaiting_scan",
+      awaiting_sms: "confirming",
+      confirming: "confirming",
+      succeeded: "succeeded",
+    };
+    document.querySelectorAll(".scan-progress li").forEach((li, index) => {
+      const span = li.querySelector("span");
+      if (span) span.textContent = labels[index];
+    });
+    if (status in activeByStatus) {
+      dialog.dataset.status = activeByStatus[status];
+    }
+  }
+
+  async function sendPhone() {
+    if (!scanId || TERMINAL.has(currentStatus)) return;
+    const value = phoneInput.value.trim();
+    if (!/^1\d{10}$/.test(value)) {
+      showMessage("请输入 11 位手机号码", 0);
+      phoneInput.focus();
+      return;
+    }
+    phoneButton.disabled = true;
+    try {
+      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}/interact`, {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+        body: new URLSearchParams({csrf_token: csrfToken, kind: "phone", text: value}),
+      });
+      const body = await readJson(response);
+      showMessage(body.message || "验证码发送中，请留意短信", 0);
+      phoneButton.disabled = false;
+      timer = window.setTimeout(pollScan, 800);
+    } catch (error) {
+      phoneButton.disabled = false;
+      showMessage(error.message || "发送失败，请重试", 0);
+    }
   }
 
   async function pollPrepared() {
@@ -152,7 +209,7 @@
         method: "POST",
         credentials: "same-origin",
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-        body: new URLSearchParams({csrf_token: csrfToken}),
+        body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
       });
       const state = await readJson(response);
       scanId = state.id;
@@ -241,7 +298,7 @@
         method: "POST",
         credentials: "same-origin",
         headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-        body: new URLSearchParams({csrf_token: csrfToken}),
+        body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
       });
       const state = await readJson(response);
       scanId = state.id;
@@ -287,13 +344,14 @@
           method: "POST",
           credentials: "same-origin",
           headers: {"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
-          body: new URLSearchParams({csrf_token: csrfToken}),
+          body: new URLSearchParams({csrf_token: csrfToken, mode: smsMode ? "sms" : "qr"}),
         },
       );
       const state = await readJson(response);
       cancelPending = false;
       closeButton.disabled = false;
       renderState(state);
+      smsMode = false;
       return true;
     } catch (error) {
       cancelPending = false;
@@ -390,6 +448,13 @@
   cancelButton.addEventListener("click", () => requestClose(false));
   qrNode.addEventListener("click", forwardBrowserClick);
   typeButton.addEventListener("click", sendBrowserText);
+  phoneButton.addEventListener("click", sendPhone);
+  phoneInput.addEventListener("keydown", (event) => {
+    if (event.key === "Enter") {
+      event.preventDefault();
+      sendPhone();
+    }
+  });
   textNode.addEventListener("keydown", (event) => {
     if (event.key === "Enter") {
       event.preventDefault();
@@ -411,3 +476,13 @@
     }
   });
 })();
+
+// SMS-mode entry: start a binding session that logs in via phone + code.
+document.addEventListener("click", function (event) {
+  var trigger = event.target.closest ? event.target.closest("#scan-start-sms") : null;
+  if (!trigger) { return; }
+  event.preventDefault();
+  if (startPending) { return; }
+  smsMode = true;
+  startScan();
+});

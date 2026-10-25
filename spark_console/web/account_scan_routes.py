@@ -73,7 +73,7 @@ def build_account_scan_router(
         return _error(429, "rate_limited", "请求过于频繁，请稍后重试")
 
     @router.post("/accounts/scan")
-    def start_scan(request: Request, csrf_token: str = Form(default="")):
+    def start_scan(request: Request, csrf_token: str = Form(default=""), mode: str = Form(default="qr")):
         with session_scope(engine) as db:
             user, record = auth.current(request, db)
             auth.csrf(record, csrf_token)
@@ -82,7 +82,7 @@ def build_account_scan_router(
             service = ScanSessionService(db)
             service.expire_stale()
             try:
-                scan = service.start(user.id)
+                scan = service.start(user.id, mode if mode in ("qr", "sms") else "qr")
             except Conflict:
                 scan = service.active_owned(user.id)
                 if scan is None:
@@ -183,6 +183,8 @@ def build_account_scan_router(
                 service = ScanSessionService(db)
                 if kind == "text":
                     service.queue_text(user.id, scan_id, text, cipher)
+                elif kind == "phone":
+                    service.queue_phone(user.id, scan_id, text, cipher)
                 elif kind == "click":
                     service.queue_click(user.id, scan_id, x, y)
                 else:
@@ -190,6 +192,8 @@ def build_account_scan_router(
             except NotFound:
                 return _error(404, "not_found", "未找到扫码会话")
             except ValidationError:
+                if kind == "phone":
+                    return _error(400, "invalid_interaction", "请输入 11 位手机号码")
                 return _error(400, "invalid_interaction", "请输入 4–8 位数字验证码")
             except Conflict:
                 return _error(409, "scan_not_active", "扫码会话已结束")

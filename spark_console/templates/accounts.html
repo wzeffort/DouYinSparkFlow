@@ -57,6 +57,7 @@
       <li><span>3</span>在手机上确认登录</li>
     </ol>
     <button id="scan-start" type="button">扫码绑定抖音账号</button>
+    <p class="scan-sms-entry">手机在身边但没法扫码？<a href="#" id="scan-start-sms">改用短信验证码登录</a>（无需第二台设备）</p>
 
     <dialog id="scan-dialog" class="scan-dialog" aria-labelledby="scan-dialog-title">
       <div class="scan-dialog-card">
@@ -79,6 +80,11 @@
                 <li data-step="awaiting_scan"><i>3</i><span>用抖音 App 扫码</span></li>
                 <li data-step="confirming"><i>4</i><span>在手机上确认登录</span></li>
               </ol>
+              <div class="scan-input-row" id="scan-phone-row" hidden>
+                <label class="sr-only" for="scan-phone">抖音绑定手机号</label>
+                <input id="scan-phone" type="tel" inputmode="numeric" autocomplete="tel-national" maxlength="11" pattern="1[0-9]{10}" placeholder="输入 11 位手机号">
+                <button id="scan-phone-send" type="button">获取验证码</button>
+              </div>
               <p id="scan-status" class="scan-status" role="status" aria-live="polite">正在创建扫码会话</p>
               <p id="scan-countdown" class="scan-countdown"></p>
               <p class="scan-sms-hint">当前仅支持短信验证码：扫码后会优先选择“接收短信验证码”。请先点击云端验证码框，再在下方输入。</p>
@@ -105,5 +111,5 @@
     </dialog>
   </section>
 </div>
-<script defer src="/static/account_scan.js?v=20261025-1"></script>
+<script defer src="/static/account_scan.js?v=20261025-2"></script>
 {% endblock %}

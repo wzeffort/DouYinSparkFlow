@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, update
@@ -27,6 +28,8 @@ ACTIVE_STATUSES = frozenset(
         ScanStatus.QUEUED,
         ScanStatus.LOADING_QR,
         ScanStatus.AWAITING_SCAN,
+        ScanStatus.AWAITING_PHONE,
+        ScanStatus.AWAITING_SMS,
         ScanStatus.CONFIRMING,
     }
 )
@@ -47,6 +50,7 @@ ALLOWED = {
     },
     ScanStatus.LOADING_QR: {
         ScanStatus.AWAITING_SCAN,
+        ScanStatus.AWAITING_PHONE,
         ScanStatus.CANCELLED,
         ScanStatus.EXPIRED,
         ScanStatus.FAILED,
@@ -54,6 +58,19 @@ ALLOWED = {
     ScanStatus.AWAITING_SCAN: {
         ScanStatus.CONFIRMING,
         ScanStatus.SUCCEEDED,
+        ScanStatus.CANCELLED,
+        ScanStatus.EXPIRED,
+        ScanStatus.FAILED,
+    },
+    ScanStatus.AWAITING_PHONE: {
+        ScanStatus.AWAITING_SMS,
+        ScanStatus.CANCELLED,
+        ScanStatus.EXPIRED,
+        ScanStatus.FAILED,
+    },
+    ScanStatus.AWAITING_SMS: {
+        ScanStatus.CONFIRMING,
+        ScanStatus.AWAITING_PHONE,
         ScanStatus.CANCELLED,
         ScanStatus.EXPIRED,
         ScanStatus.FAILED,
@@ -81,6 +98,8 @@ STATUS_MESSAGES = {
     ScanStatus.QUEUED: "等待浏览器空闲及服务器资源恢复，随后加载扫码页面",
     ScanStatus.LOADING_QR: "正在加载二维码",
     ScanStatus.AWAITING_SCAN: "请使用抖音 App 扫码并在手机确认",
+    ScanStatus.AWAITING_PHONE: "请输入抖音绑定的手机号",
+    ScanStatus.AWAITING_SMS: "验证码已发送，请输入短信验证码",
     ScanStatus.CONFIRMING: "已扫码；确认后正在抓取并加密保存登录凭证",
     ScanStatus.SUCCEEDED: "绑定成功",
     ScanStatus.FAILED: "绑定失败，请重试",
@@ -114,12 +133,13 @@ class ScanSessionService:
         self.now = now
         self.lifetime = lifetime
 
-    def start(self, owner_id: str) -> DouyinLoginSession:
+    def start(self, owner_id: str, mode: str = "qr") -> DouyinLoginSession:
         current = self._now()
         scan = DouyinLoginSession(
             owner_user_id=owner_id,
             slot="global",
             status=ScanStatus.QUEUED,
+            login_mode="sms" if mode == "sms" else "qr",
             expires_at=current + self.lifetime,
             created_at=current,
             updated_at=current,
@@ -247,6 +267,7 @@ class ScanSessionService:
             plaintext.clear()
         pending = DouyinLoginInput(
             scan_id=scan.id,
+            kind="text",
             ciphertext=encrypted.ciphertext,
             nonce=encrypted.nonce,
             created_at=self._now(),
@@ -254,6 +275,41 @@ class ScanSessionService:
         self.session.add(pending)
         self.session.flush()
         return pending
+
+    def queue_phone(
+        self,
+        owner_id: str,
+        scan_id: str,
+        value: str,
+        cipher: CookieCipher,
+    ) -> DouyinLoginInput:
+        if not isinstance(value, str) or not re.fullmatch("1[0-9]{10}", value.strip()):
+            raise ValidationError("invalid_interaction")
+        scan = self.get_owned(owner_id, scan_id)
+        if scan.slot != "global" or self._status(scan) not in ACTIVE_STATUSES:
+            raise Conflict("scan_not_active")
+        plaintext = bytearray(value.strip().encode("ascii"))
+        try:
+            encrypted = cipher.encrypt(bytes(plaintext))
+        finally:
+            plaintext[:] = b"\0" * len(plaintext)
+            plaintext.clear()
+        pending = DouyinLoginInput(
+            scan_id=scan.id,
+            kind="phone",
+            ciphertext=encrypted.ciphertext,
+            nonce=encrypted.nonce,
+            created_at=self._now(),
+        )
+        self.session.add(pending)
+        self.session.flush()
+        return pending
+
+    def mark_stage(self, scan_id: str, stage: str) -> DouyinLoginSession:
+        if stage not in (ScanStatus.AWAITING_PHONE, ScanStatus.AWAITING_SMS):
+            raise ValidationError("invalid_stage")
+        scan = self._get(scan_id)
+        return self._cas_transition(scan, ScanStatus(stage))
 
     def claim_interaction(
         self, scan_id: str, cipher: CookieCipher | None = None
@@ -300,7 +356,7 @@ class ScanSessionService:
         pending.nonce = None
         pending.consumed_at = self._now()
         self.session.flush()
-        return {"kind": "text", "text": value}
+        return {"kind": pending.kind or "text", "text": value}
 
     def mark_confirming(self, scan_id: str) -> DouyinLoginSession:
         scan = self._get(scan_id)
@@ -412,6 +468,7 @@ class ScanSessionService:
         return {
             "id": scan.id,
             "status": status.value,
+            "login_mode": (scan.login_mode or "qr") if hasattr(scan, "login_mode") else "qr",
             "remaining_seconds": remaining_seconds,
             "error": public_error,
             "message": ERROR_MESSAGES.get(
