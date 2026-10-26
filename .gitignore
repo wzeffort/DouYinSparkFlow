@@ -25,3 +25,6 @@ artifacts/
 deploy/shared-db/runtime/
 deploy/shared-db/compose.database.staging.yml
 releases/
+
+# Local account cookies must never be committed.
+wz.json
