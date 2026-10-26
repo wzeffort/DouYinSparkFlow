@@ -337,6 +337,11 @@ class Worker:
             nonlocal stopped_for_auth, denied
             with session_scope(self.engine) as db:
                 BatchRunService(db).record(run_id, recipients[index]["position"], result)
+                if result.success and not stopped_for_auth:
+                    db.execute(update(DouyinAccount).where(DouyinAccount.id == account_id).values(
+                        validation_state="valid", last_verified_at=datetime.now(timezone.utc),
+                        invalidated_at=None, invalid_reason_code=None, auth_incident_id=None,
+                    ))
                 if result.error_code in {"login_expired", "cookie_invalid"}:
                     stopped_for_auth = True
                     self._record_auth_incident(db, db.get(DouyinAccount, account_id),

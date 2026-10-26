@@ -29,7 +29,7 @@ def test_scan_button_opens_dialog_and_creates_session_in_browser(mobile, failed)
                     if request.method == 'POST' and request.url.endswith('/accounts/scan'):
                         starts.append(request.post_data)
                     if failed and request.method == 'GET' and '/accounts/scan/' in request.url:
-                        route.fulfill(json={'id': 'fixture', 'status': 'failed', 'remaining_seconds': 0,
+                        route.fulfill(json={'id': request.url.rsplit('/', 1)[-1], 'status': 'failed', 'remaining_seconds': 0,
                             'message': 'automation failed', 'login_mode': 'sms' if mobile else 'qr'})
                         return
                     response = fixture.owner_client.request(request.method, request.url,
@@ -47,6 +47,8 @@ def test_scan_button_opens_dialog_and_creates_session_in_browser(mobile, failed)
                     assert "手机号" in page.locator("#scan-dialog-title").inner_text()
                 if failed:
                     expect(page.locator("#scan-status")).to_have_text("automation failed")
+                    assert page.locator('#scan-retry').is_visible()
+                    assert page.locator('#scan-alternate').is_visible()
                     assert page.locator('#scan-placeholder').is_hidden()
                     assert page.locator('.scan-frame').is_hidden()
                     assert not page.locator('#scan-start').is_disabled()

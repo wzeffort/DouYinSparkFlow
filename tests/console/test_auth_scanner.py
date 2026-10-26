@@ -392,6 +392,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
         prepared = SimpleNamespace(page=page, context=object())
         actions = iter([{"kind": "phone", "text": "13800000000"},
                         {"kind": "text", "text": "123456"}])
+        scanner._wait_for_sms_sent = AsyncMock()
         stages, confirmations = [], []
         scanner._account_session_is_authenticated = AsyncMock(return_value=True)
         await scanner._sms_login_flow(prepared, stages.append, confirmations.append,

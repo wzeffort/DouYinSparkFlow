@@ -14,6 +14,7 @@ from spark_console.auth_scanner import (
     ScanCancelled,
     ScannedAccount,
     VerificationRequired,
+    SmsSendFailed,
 )
 from spark_console.auth_worker import AuthWorker
 from spark_console.config import Settings
@@ -385,6 +386,7 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
             (QrLoadFailed(), "qr_load_failed"),
             (LoginTimedOut(), "login_timeout"),
             (VerificationRequired(), "verification_required"),
+            (SmsSendFailed(), "sms_send_failed"),
             (ScanCancelled(), "cancelled"),
         )
         for error, expected_code in cases:

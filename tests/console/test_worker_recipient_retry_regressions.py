@@ -100,3 +100,31 @@ def test_enabling_sparse_batch_checks_overlap(services):
     create_batch(services, recipients(2)[1:], time='10:00')
     with pytest.raises(ValidationError, match='已在'):
         tasks.set_enabled_owned(owner.id, task.id, True)
+
+
+@pytest.mark.parametrize('auth_failure', [False, True])
+def test_batch_success_refreshes_account_but_later_auth_failure_wins(services, tmp_path, auth_failure):
+    db, _, _, account, _, _ = services
+    task = create_batch(services)
+    now = datetime.now(timezone.utc)
+    account.validation_state = 'unknown'
+    account.last_verified_at = None
+    task.next_run_at = now
+    db.commit()
+    class Executor:
+        async def execute_batch(self, cookies, pending, *, before_send, on_result, credential_version):
+            for index in range(len(pending)):
+                assert await before_send(index)
+                result = ExecutionResult(False, 'authenticating', 'login_expired') if auth_failure and index == 1 else ExecutionResult(True, 'complete')
+                await on_result(index, result)
+                if not result.success: break
+    worker = make_worker(db, tmp_path, now, Executor())
+    asyncio.run(worker.run_once(now))
+    db.expire_all()
+    checked = db.get(models.DouyinAccount, account.id)
+    assert checked.validation_state == ('invalid' if auth_failure else 'valid')
+    assert checked.last_verified_at is not None
+    if not auth_failure:
+        assert checked.invalidated_at is None
+        assert checked.invalid_reason_code is None
+        assert checked.auth_incident_id is None

@@ -14,6 +14,7 @@ function deferred() {
 
 function response(status, body) {
   return {
+    status,
     ok: status >= 200 && status < 300,
     redirected: false,
     async json() { return body; },
@@ -81,6 +82,8 @@ function createEnvironment(fetchImpl, {preload = false, mobile = false} = {}) {
     "#scan-dialog",
     "#scan-close",
     "#scan-cancel",
+    "#scan-retry",
+    "#scan-alternate",
     "#scan-stage",
     "#scan-status",
     "#scan-countdown",
@@ -227,7 +230,7 @@ async function activeCancelFailure() {
   assert(elements["#scan-status"].textContent === "取消失败，请重试", "cancellation failure was not fixed user copy");
   assert(!elements["#scan-status"].textContent.includes("sensitive"), "server cancellation detail reached the UI");
   assert(!elements["#scan-cancel"].disabled, "cancel control was not re-enabled for retry");
-  assert(timers.size === 0, "hidden polling continued after cancellation failure");
+  assert(timers.size === 1, "cancellation failure should resume one status poll");
 
   await elements["#scan-cancel"].emit("click");
   assert(dialog.closeCount === 1, "successful cancellation retry did not close dialog");
@@ -384,9 +387,8 @@ async function browserText() {
     });
     return response(202, {accepted: true});
   });
-  elements["#scan-text"].value = "123456";
-
   await elements["#scan-start"].emit("click");
+  elements["#scan-text"].value = "123456";
   await elements["#scan-type"].emit("click");
 
   const interaction = calls.find((call) => call.url.includes("/interact"));
@@ -456,9 +458,46 @@ async function phoneSubmitKeepsSinglePoll() {
   assert(polls === 1 && timers.size === 1, "poll completion did not retain exactly one loop");
 }
 
+async function recovery(kind) {
+  let starts = 0, polls = 0;
+  const late = deferred();
+  const env = createEnvironment(async (url) => {
+    if (url === "/accounts/scan") return response(201, {id: `s${++starts}`, status: "awaiting_phone", login_mode: "sms"});
+    if (url.endsWith("/cancel")) return response(200, {id: "s1", status: "cancelled"});
+    polls++;
+    if (kind === "late") return late.promise;
+    if (kind === "permanent") return response(404, {message: "not found"});
+    if (polls === 1) throw new Error("offline");
+    return response(200, {id: "s1", status: "awaiting_sms", login_mode: "sms"});
+  }, {mobile: true});
+  const fire = async () => {
+    const [id, t] = [...env.timers][0]; env.timers.delete(id); t.callback(); await flush();
+  };
+  await env.elements["#scan-start"].emit("click");
+  await fire();
+  if (kind === "late") {
+    await env.elements["#scan-cancel"].emit("click");
+    late.resolve(response(200, {id: "s1", status: "awaiting_phone", login_mode: "sms"}));
+    await flush();
+    await env.elements["#scan-start"].emit("click");
+    assert(starts === 2, "late response resurrected cancelled session");
+  } else if (kind === "permanent") {
+    assert(env.timers.size === 0, "permanent error must stop retry");
+    assert(!env.elements["#scan-retry"].hidden, "missing recovery entry");
+    await env.elements["#scan-alternate"].emit("click"); await flush();
+    assert(starts === 2, "alternate mode must start new session");
+  } else {
+    assert(env.timers.size === 1, "transient failure lost polling");
+    await fire();
+    assert(polls === 2 && env.timers.size === 1, "recovery duplicated or stopped polling");
+    assert(!env.elements["#scan-text"].disabled, "recovery did not render SMS stage");
+  }
+}
+
 async function main() {
   const scenario = process.argv[2];
-  if (scenario === "pending-close") await pendingIntent("#scan-close");
+  if (["late", "reconnect", "permanent"].includes(scenario)) await recovery(scenario);
+  else if (scenario === "pending-close") await pendingIntent("#scan-close");
   else if (scenario === "pending-cancel") await pendingIntent("#scan-cancel");
   else if (scenario === "active-cancel-failure") await activeCancelFailure();
   else if (scenario === "no-auto-preload") await noAutoPreload();

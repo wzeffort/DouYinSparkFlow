@@ -16,6 +16,7 @@ from spark_console.auth_scanner import (
     QrLoadFailed,
     ScanCancelled,
     VerificationRequired,
+    SmsSendFailed,
 )
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
@@ -34,6 +35,7 @@ ERROR_CODES = {
     QrLoadFailed: "qr_load_failed",
     LoginTimedOut: "login_timeout",
     VerificationRequired: "verification_required",
+    SmsSendFailed: "sms_send_failed",
     ScanCancelled: "cancelled",
 }
 

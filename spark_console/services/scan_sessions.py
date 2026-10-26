@@ -91,6 +91,7 @@ FAILURE_CODES = frozenset(
         "verification_required",
         "credential_invalid",
         "automation_failed",
+        "sms_send_failed",
     }
 )
 
@@ -110,9 +111,10 @@ ERROR_MESSAGES = {
     "qr_load_failed": "二维码加载失败，请重试",
     "login_timeout": "扫码已超时，请重试",
     "cancelled": "扫码已取消",
-    "verification_required": "抖音要求额外验证，请稍后重试",
+    "verification_required": "抖音要求额外验证或限制短信发送，请先在抖音 App 完成验证，稍后重新绑定或改用扫码",
     "credential_invalid": "登录凭证无效，请重试",
     "automation_failed": "自动化登录失败，请重试",
+    "sms_send_failed": "未确认短信发送成功，请核对手机号后重新绑定，或改用扫码；请勿连续发送",
 }
 
 

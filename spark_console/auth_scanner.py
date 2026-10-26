@@ -74,6 +74,10 @@ class VerificationRequired(Exception):
     pass
 
 
+class SmsSendFailed(Exception):
+    pass
+
+
 class ScanCancelled(Exception):
     pass
 
@@ -354,6 +358,28 @@ class DouyinQrScanner:
             platform_user_id,
         )
 
+    async def _wait_for_sms_sent(self, page, cancelled, deadline):
+        # A click is not evidence that the platform accepted the SMS request.
+        loop = asyncio.get_running_loop()
+        until = min(deadline, loop.time() + 20)
+        sent = re.compile(r"(?:验证码|短信).*已发送|重新(?:发送|获取).*\d|\d+\s*[sS秒].*(?:重发|重新)|^\d+\s*[sS秒]$")
+        risk = re.compile(r"安全验证|请完成验证|拖动滑块|操作过于频繁|发送频繁|稍后再试")
+        rejected = re.compile(r"手机号.*(?:错误|不正确|无效)|发送失败|获取验证码失败")
+        while loop.time() < until:
+            if await self._callback(cancelled):
+                raise ScanCancelled()
+            for pattern, error in ((risk, VerificationRequired), (rejected, SmsSendFailed)):
+                for control in await page.get_by_text(pattern).all():
+                    if await control.is_visible():
+                        raise error()
+            for control in await page.get_by_text(sent).all():
+                if await control.is_visible():
+                    return
+            await asyncio.sleep(0.5)
+        if loop.time() >= deadline:
+            raise LoginTimedOut()
+        raise SmsSendFailed()
+
     async def _sms_login_flow(self, prepared, on_stage, on_confirming, next_interaction, cancelled, deadline):
         page = prepared.page
         loop = asyncio.get_running_loop()
@@ -427,6 +453,7 @@ class DouyinQrScanner:
                 continue
         if not sent:
             raise QrLoadFailed()
+        await self._wait_for_sms_sent(page, cancelled, deadline)
         # Stay in awaiting_sms until the account API confirms success. A rejected
         # code must not strand the session in confirming or append to the old code.
         await stage("awaiting_sms")

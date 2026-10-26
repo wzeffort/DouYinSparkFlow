@@ -26,6 +26,9 @@
   const phoneRow = document.querySelector("#scan-phone-row");
   const smsHint = document.querySelector(".scan-sms-hint");
 
+  let generation = 0;
+  let pollFailures = 0;
+  let pollInFlight = null;
   let scanId = null;
   let currentStatus = null;
   let timer = null;
@@ -96,6 +99,14 @@
   }
 
   function renderState(state) {
+    pollFailures = 0;
+    const retry = document.querySelector("#scan-retry");
+    const alternate = document.querySelector("#scan-alternate");
+    if (retry) retry.hidden = !TERMINAL.has(state.status) || state.status === "succeeded";
+    if (alternate) {
+      alternate.hidden = !TERMINAL.has(state.status) || state.status === "succeeded";
+      alternate.textContent = smsMode ? "改用扫码绑定" : "改用手机号绑定";
+    }
     preparedState = TERMINAL.has(state.status) ? null : state;
     currentStatus = state.status;
     dialog.dataset.status = state.status;
@@ -177,33 +188,7 @@
   }
 
   async function pollPrepared() {
-    if (!scanId || startPending || closeRequested || cancelPending) return;
-    try {
-      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}`, {
-        cache: "no-store",
-        credentials: "same-origin",
-      });
-      const state = await readJson(response);
-      preparedState = state;
-      currentStatus = state.status;
-      if (state.status === "awaiting_scan") {
-        loadQrOnce(scanId);
-        setQrVisible(true);
-        setBusy(false);
-        return;
-      }
-      if (TERMINAL.has(state.status)) {
-        scanId = null;
-        preparedState = null;
-        setBusy(false);
-        return;
-      }
-      timer = window.setTimeout(pollPrepared, pollDelay());
-    } catch (_error) {
-      scanId = null;
-      preparedState = null;
-      setBusy(false);
-    }
+    return pollScan(true);
   }
 
   async function preloadScan() {
@@ -241,7 +226,7 @@
   async function readJson(response) {
     if (response.redirected) {
       window.location.assign("/login");
-      throw new Error("登录状态已失效");
+      throw Object.assign(new Error("登录状态已失效"), {status: 401});
     }
     let body = {};
     try {
@@ -250,37 +235,57 @@
       body = {};
     }
     if (!response.ok) {
-      throw new Error(body.message || "请求未完成，请稍后重试");
+      throw Object.assign(new Error(body.message || "请求未完成，请稍后重试"), {status: response.status});
     }
     return body;
   }
 
-  async function pollScan() {
-    if (!scanId || closeRequested || cancelPending) return;
+  async function pollScan(preparing = false) {
+    if (!scanId || closeRequested || cancelPending || TERMINAL.has(currentStatus)) return;
+    const ticket = generation;
+    const id = scanId;
+    if (pollInFlight === ticket) return;
+    pollInFlight = ticket;
+    const current = () => ticket === generation && id === scanId && !closeRequested && !cancelPending;
     try {
-      const response = await fetch(`/accounts/scan/${encodeURIComponent(scanId)}`, {
-        cache: "no-store",
-        credentials: "same-origin",
+      const response = await fetch(`/accounts/scan/${encodeURIComponent(id)}`, {
+        cache: "no-store", credentials: "same-origin",
       });
+      if (!current()) return;
       const state = await readJson(response);
-      if (closeRequested || cancelPending) return;
-      if (!renderState(state)) {
-        timer = window.setTimeout(pollScan, pollDelay());
+      if (!current()) return;
+      if (!state || state.id !== id || !state.status) throw new Error("状态响应暂不可用");
+      const terminal = renderState(state);
+      if (preparing && !dialog.open) setBusy(false);
+      if (!terminal) {
+        clearTimer();
+        timer = window.setTimeout(preparing && !dialog.open ? pollPrepared : pollScan, pollDelay());
       }
     } catch (error) {
-      setBusy(false);
-      setQrVisible(false);
-      showMessage(error.message, 0);
+      if (!current()) return;
+      const permanent = error.status >= 400 && error.status < 500 && ![408, 429].includes(error.status);
+      if (permanent || ++pollFailures > 8) {
+        renderState({id, status: "failed", message: permanent ? error.message : "连接暂未恢复，请重新绑定"});
+      } else {
+        showMessage("连接暂时中断，正在自动重试…", 0);
+        clearTimer();
+        timer = window.setTimeout(preparing && !dialog.open ? pollPrepared : pollScan,
+          Math.min(1000 * 2 ** (pollFailures - 1), 10000));
+      }
+    } finally {
+      if (pollInFlight === ticket) pollInFlight = null;
     }
   }
 
   async function startScan() {
+    if (startPending && !preloadPromise) return;
     if (preloadPromise) {
       await preloadPromise;
       preloadPromise = null;
     }
     if (scanId && preparedState && !TERMINAL.has(currentStatus) && !TERMINAL.has(preparedState.status)) {
       clearTimer();
+      generation += 1;
       closeRequested = false;
       cancelPending = false;
       if (!dialog.open) dialog.showModal();
@@ -289,9 +294,15 @@
       return;
     }
     clearTimer();
+    generation += 1;
+    pollFailures = 0;
     scanId = null;
     currentStatus = null;
     startPending = true;
+    if (retryButton) retryButton.hidden = true;
+    if (alternateButton) alternateButton.hidden = true;
+    textNode.value = "";
+    closeButton.disabled = false;
     closeRequested = false;
     cancelPending = false;
     setQrVisible(false);
@@ -339,6 +350,7 @@
     clearTimer();
     if (!scanId || TERMINAL.has(currentStatus)) return true;
     if (cancelPending) return false;
+    generation += 1;
     cancelPending = true;
     closeButton.disabled = true;
     cancelButton.disabled = true;
@@ -363,6 +375,7 @@
       closeButton.disabled = false;
       cancelButton.disabled = false;
       stageNode.setAttribute("aria-busy", "false");
+      timer = window.setTimeout(pollScan, 1000);
       showMessage("取消失败，请重试", 0);
       return false;
     }
@@ -437,6 +450,10 @@
   }
 
   startButton.addEventListener("click", startScan);
+  const retryButton = document.querySelector("#scan-retry");
+  const alternateButton = document.querySelector("#scan-alternate");
+  if (retryButton) retryButton.addEventListener("click", startScan);
+  if (alternateButton) alternateButton.addEventListener("click", toggleMode);
   // Primary binding mode follows the viewport: phones default to SMS-code
   // login (their screen cannot be scanned by their own Douyin app), larger
   // screens default to the QR flow. The toggle switches before starting.
