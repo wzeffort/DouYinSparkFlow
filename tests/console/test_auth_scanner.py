@@ -382,7 +382,7 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sms_flow_calls_sync_confirmation_after_phone_and_code(self):
         scanner, _, _ = self._scanner()
-        control = SimpleNamespace(is_visible=AsyncMock(return_value=True), click=AsyncMock())
+        control = SimpleNamespace(is_visible=AsyncMock(return_value=True), click=AsyncMock(), fill=AsyncMock())
         locator = SimpleNamespace(first=control, last=control)
         page = SimpleNamespace(
             get_by_text=lambda *a, **k: SimpleNamespace(all=AsyncMock(return_value=[control])),
@@ -398,7 +398,8 @@ class DouyinQrScannerTests(unittest.IsolatedAsyncioTestCase):
             lambda: next(actions), lambda: False, asyncio.get_running_loop().time() + 5)
         self.assertEqual(["awaiting_phone", "awaiting_sms"], stages)
         self.assertEqual([True], confirmations)
-        self.assertEqual(2, page.keyboard.type.await_count)
+        self.assertEqual(1, page.keyboard.type.await_count)
+        control.fill.assert_awaited_once_with("123456", timeout=5_000)
 
     async def test_randomized_square_qr_is_found_without_qrcode_class(self):
         scanner, browser, context = self._scanner(semantic_qr=True)

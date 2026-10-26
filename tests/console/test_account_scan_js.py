@@ -22,6 +22,15 @@ class AccountScanJavaScriptTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertIn(f'"scenario":"{scenario}"', completed.stdout)
 
+    def test_cancelled_preloaded_session_is_not_reused(self):
+        self.run_scenario("retry-cancelled")
+
+    def test_switch_mode_starts_a_new_session(self):
+        self.run_scenario("toggle-after-preload")
+
+    def test_qr_secondary_sms_can_be_entered(self):
+        self.run_scenario("qr-secondary-sms")
+
     def test_close_during_pending_start_cancels_returned_scan_before_hiding(self):
         self.run_scenario("pending-close")
 

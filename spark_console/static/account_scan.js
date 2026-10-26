@@ -96,6 +96,7 @@
   }
 
   function renderState(state) {
+    preparedState = TERMINAL.has(state.status) ? null : state;
     currentStatus = state.status;
     dialog.dataset.status = state.status;
     showMessage(state.message, state.remaining_seconds);
@@ -106,13 +107,11 @@
     if (browserActive) {
       loadQrOnce(scanId);
     }
-    if (state.login_mode === "sms") {
-      applySmsSteps(state.status);
-    }
+    applySmsSteps(state.status);
     const phoneStage = state.status === "awaiting_phone";
     phoneRow.hidden = !phoneStage;
     smsHint.hidden = phoneStage || TERMINAL.has(state.status);
-    const smsStage = state.status === "awaiting_sms";
+    const smsStage = state.status === "awaiting_sms" || (!smsMode && state.status === "confirming");
     const terminal = TERMINAL.has(state.status);
     textNode.disabled = terminal || !smsStage;
     typeButton.disabled = terminal || !smsStage;
@@ -131,7 +130,9 @@
   }
 
   function applySmsSteps(status) {
-    const labels = ["创建绑定会话", "打开抖音登录页", "输入手机号", "输入验证码确认"];
+    const labels = smsMode
+      ? ["创建绑定会话", "打开抖音登录页", "输入手机号", "输入验证码确认"]
+      : ["创建绑定会话", "打开抖音登录页", "用抖音 App 扫码", "在手机上确认登录"];
     const activeByStatus = {
       queued: "queued",
       loading_qr: "loading_qr",
@@ -144,7 +145,7 @@
       const span = li.querySelector("span");
       if (span) span.textContent = labels[index];
     });
-    if (status in activeByStatus) {
+    if (smsMode && status in activeByStatus) {
       dialog.dataset.status = activeByStatus[status];
     }
   }
@@ -278,7 +279,7 @@
       await preloadPromise;
       preloadPromise = null;
     }
-    if (scanId && preparedState && !TERMINAL.has(preparedState.status)) {
+    if (scanId && preparedState && !TERMINAL.has(currentStatus) && !TERMINAL.has(preparedState.status)) {
       clearTimer();
       closeRequested = false;
       cancelPending = false;

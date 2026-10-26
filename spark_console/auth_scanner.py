@@ -427,43 +427,37 @@ class DouyinQrScanner:
                 continue
         if not sent:
             raise QrLoadFailed()
-        # 3) wait for the SMS code, enter and submit
+        # Stay in awaiting_sms until the account API confirms success. A rejected
+        # code must not strand the session in confirming or append to the old code.
         await stage("awaiting_sms")
-        code = await wait_action("text", 240)
-        if not code:
-            raise LoginTimedOut()
-        await self._callback(on_confirming, True)
-        code_input = None
-        for selector in ('input[placeholder*="验证码"]', 'input[inputmode*="numeric"]'):
-            try:
-                candidate = page.locator(selector).last
-                if await candidate.is_visible():
-                    code_input = candidate
-                    break
-            except Exception:
-                continue
-        if code_input is not None:
-            await code_input.click(timeout=5_000)
-        await page.keyboard.type(code)
-        await asyncio.sleep(1)
-        for label in ("验证并登录", "登录", "验证"):
-            try:
-                clicked = False
-                for button in await page.get_by_text(label, exact=True).all():
-                    if await button.is_visible():
-                        await button.click(timeout=5_000)
-                        clicked = True
-                        break
-                if clicked:
-                    break
-            except Exception:
-                continue
-        # 4) authenticated verdict via the account API, shape-agnostic
+        submitted = False
         while loop.time() < deadline:
-            if cancelled():
+            if await self._callback(cancelled):
                 raise ScanCancelled()
-            if await self._account_session_is_authenticated(prepared.context):
+            if submitted and await self._account_session_is_authenticated(prepared.context):
+                await self._callback(on_confirming, True)
                 return
+            action = await self._callback(next_interaction) if callable(next_interaction) else None
+            if isinstance(action, dict) and action.get("kind") == "text":
+                code_input = None
+                for selector in ('input[placeholder*="验证码"]', 'input[autocomplete="one-time-code"]'):
+                    candidate = page.locator(selector).last
+                    if await candidate.is_visible():
+                        code_input = candidate
+                        break
+                if code_input is None:
+                    raise QrLoadFailed()
+                await code_input.fill(str(action.get("text", "")), timeout=5_000)
+                for label in ("验证并登录", "登录", "验证"):
+                    clicked = False
+                    for button in await page.get_by_text(label, exact=True).all():
+                        if await button.is_visible():
+                            await button.click(timeout=5_000)
+                            clicked = True
+                            break
+                    if clicked:
+                        break
+                submitted = True
             await asyncio.sleep(1.5)
         raise LoginTimedOut()
 

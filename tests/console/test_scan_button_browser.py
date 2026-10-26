@@ -55,6 +55,14 @@ def test_scan_button_opens_dialog_and_creates_session_in_browser(mobile, failed)
                 assert not errors, errors
                 assert len(starts) == 1
                 assert ('mode=sms' if mobile else 'mode=qr') in starts[0]
+                if not failed:
+                    page.locator('#scan-cancel').click()
+                    expect(page.locator('#scan-dialog')).not_to_be_visible()
+                    page.locator('#scan-start').click()
+                    expect(page.locator('#scan-dialog')).to_be_visible()
+                    assert len(starts) == 2
+                    assert ('mode=sms' if mobile else 'mode=qr') in starts[1]
+
             finally:
                 browser.close()
     finally:

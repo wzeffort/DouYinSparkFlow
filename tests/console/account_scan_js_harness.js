@@ -397,6 +397,41 @@ async function browserText() {
   assert(elements["#scan-text"].value === "", "verification code remained in the page after sending");
 }
 
+async function restartAfterCancel(toggle) {
+  const starts = [];
+  const {elements} = createEnvironment(async (url, options) => {
+    if (url === "/accounts/scan") {
+      const mode = new URLSearchParams(options.body).get("mode");
+      starts.push(mode);
+      return response(201, {id: `session-${starts.length}`, status: mode === "sms" ? "awaiting_phone" : "awaiting_scan", login_mode: mode});
+    }
+    if (url.endsWith("/cancel")) return response(200, {id: "session-1", status: "cancelled", login_mode: "sms"});
+    throw new Error("unexpected request");
+  }, {mobile: true});
+  elements["#scan-start"].emit("pointerdown");
+  await flush();
+  await elements["#scan-start"].emit("click");
+  if (toggle) {
+    elements["#scan-mode-toggle"].emit("click");
+    await flush();
+  } else {
+    await elements["#scan-cancel"].emit("click");
+    await elements["#scan-start"].emit("click");
+  }
+  assert(starts.length === 2, "retry reused the cancelled prepared session");
+  assert(starts[1] === (toggle ? "qr" : "sms"), "retry used the wrong login mode");
+  assert(elements["#scan-dialog"].open, "retry dialog did not open");
+}
+
+async function qrSecondarySms() {
+  const {elements} = createEnvironment(async () => response(201, {
+    id: "qr-sms", status: "confirming", login_mode: "qr",
+  }));
+  await elements["#scan-start"].emit("click");
+  assert(!elements["#scan-text"].disabled, "QR secondary SMS input is disabled");
+  assert(!elements["#scan-type"].disabled, "QR secondary SMS submit is disabled");
+}
+
 async function main() {
   const scenario = process.argv[2];
   if (scenario === "pending-close") await pendingIntent("#scan-close");
@@ -411,6 +446,9 @@ async function main() {
   else if (scenario === "browser-text") await browserText();
   else if (scenario === "desktop-start") await startByViewport(false);
   else if (scenario === "mobile-start") await startByViewport(true);
+  else if (scenario === "retry-cancelled") await restartAfterCancel(false);
+  else if (scenario === "toggle-after-preload") await restartAfterCancel(true);
+  else if (scenario === "qr-secondary-sms") await qrSecondarySms();
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
 }
