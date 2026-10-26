@@ -244,6 +244,25 @@ class AuthWorkerTests(unittest.IsolatedAsyncioTestCase):
         with session_scope(self.engine) as session:
             session.get(DouyinLoginSession, scan_id).expires_at = expires_at
 
+    async def test_sms_stages_reach_confirmation_and_save_account(self):
+        scan_id = self._start_scan()
+        with session_scope(self.engine) as db:
+            db.get(DouyinLoginSession, scan_id).login_mode = "sms"
+        observed = []
+        outer = self
+        class SmsScanner:
+            async def run_prepared(self, on_qr, on_confirming, cancelled, **kwargs):
+                outer.assertEqual("sms", kwargs["login_mode"])
+                for stage in ("awaiting_phone", "awaiting_sms"):
+                    kwargs["on_stage"](stage)
+                    observed.append(outer._persisted(scan_id)["status"])
+                on_confirming(True)
+                observed.append(outer._persisted(scan_id)["status"])
+                return ScannedAccount("test", "test-id", _storage_state(), (), ())
+        await AuthWorker(self.settings, self.engine, scanner=SmsScanner()).run_once()
+        self.assertEqual(["awaiting_phone", "awaiting_sms", "confirming"], observed)
+        self.assertEqual("succeeded", self._persisted(scan_id)["status"])
+
     async def test_success_uses_real_state_machine_and_encrypted_account_service(self):
         scan_id = self._start_scan()
         scanner = _LifecycleScanner(self.engine, scan_id)

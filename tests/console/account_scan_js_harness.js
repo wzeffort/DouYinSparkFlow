@@ -282,12 +282,12 @@ async function mobileCrop() {
   let statusPoll = 0;
   const {elements, timers} = createEnvironment(async (url) => {
     if (url === "/accounts/scan") return response(201, {
-      id: "scan-mobile", status: "awaiting_scan", remaining_seconds: 250,
+      id: "scan-mobile", login_mode: "qr", status: "awaiting_scan", remaining_seconds: 250,
       error: null, message: "请使用抖音 App 扫码并在手机确认", account_id: null,
     });
     statusPoll += 1;
     return response(200, {
-      id: "scan-mobile", status: "confirming", remaining_seconds: 220,
+      id: "scan-mobile", login_mode: "qr", status: "confirming", remaining_seconds: 220,
       error: null, message: "已扫码", account_id: null,
     });
   }, {mobile: true});

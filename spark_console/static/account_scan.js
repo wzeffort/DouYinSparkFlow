@@ -57,7 +57,9 @@
     qrNode.hidden = !visible || cropMode;
     qrCropNode.hidden = !cropMode;
     mobileActionsNode.hidden = !cropMode;
-    placeholderNode.hidden = visible;
+    placeholderNode.hidden = visible || TERMINAL.has(currentStatus) || currentStatus === "awaiting_phone" || currentStatus === "awaiting_sms" || (smsMode && currentStatus === "confirming");
+    const frame = document.querySelector(".scan-frame");
+    if (frame) frame.hidden = !visible && placeholderNode.hidden;
     if (!visible) {
       qrNode.removeAttribute("src");
       qrCropNode.removeAttribute("src");
@@ -82,7 +84,7 @@
 
   function setBusy(busy) {
     startButton.disabled = busy;
-    startButton.textContent = busy ? "正在发起绑定…" : "扫码绑定抖音账号";
+    startButton.textContent = busy ? "正在发起绑定…" : (smsMode ? "手机号验证码绑定" : "扫码绑定抖音账号");
     stageNode.setAttribute("aria-busy", busy ? "true" : "false");
   }
 
@@ -97,7 +99,9 @@
     currentStatus = state.status;
     dialog.dataset.status = state.status;
     showMessage(state.message, state.remaining_seconds);
-    const browserActive = state.status === "awaiting_scan" || state.status === "confirming";
+    if (state.login_mode) smsMode = state.login_mode === "sms";
+    updateModeUi();
+    const browserActive = !smsMode && (state.status === "awaiting_scan" || state.status === "confirming");
     setQrVisible(browserActive);
     if (browserActive) {
       loadQrOnce(scanId);
@@ -107,7 +111,7 @@
     }
     const phoneStage = state.status === "awaiting_phone";
     phoneRow.hidden = !phoneStage;
-    smsHint.hidden = phoneStage;
+    smsHint.hidden = phoneStage || TERMINAL.has(state.status);
     const smsStage = state.status === "awaiting_sms";
     const terminal = TERMINAL.has(state.status);
     textNode.disabled = terminal || !smsStage;
@@ -436,6 +440,9 @@
   // login (their screen cannot be scanned by their own Douyin app), larger
   // screens default to the QR flow. The toggle switches before starting.
   function updateModeUi() {
+    const title = document.querySelector("#scan-dialog-title");
+    if (title) title.textContent = smsMode ? "手机号绑定抖音账号" : "扫码绑定抖音账号";
+    smsHint.textContent = smsMode ? "请输入抖音绑定手机号收到的短信验证码，提交后自动完成登录。" : "扫码后如需短信验证，请先点击云端验证码框，再在下方输入。";
     if (smsMode) {
       startButton.textContent = "手机号验证码绑定";
       modeToggle.textContent = "更习惯扫码？改用扫码绑定（需另一台设备的屏幕）";

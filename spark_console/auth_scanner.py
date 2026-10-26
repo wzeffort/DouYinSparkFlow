@@ -271,12 +271,12 @@ class DouyinQrScanner:
             if login_mode == "sms":
                 await self._await_stage(
                     self._sms_login_flow(
-                        prepared, on_stage, next_interaction, cancelled, deadline
+                        prepared, on_stage, on_confirming, next_interaction, cancelled, deadline
                     ),
                     cancelled,
                     deadline,
                 )
-                return await self._capture_account(prepared, deadline)
+                return await self._capture_account(prepared, cancelled, deadline)
             await self._await_stage(
                 self._publish_qr(on_qr, prepared.full_png, prepared.crop_png),
                 cancelled,
@@ -304,48 +304,46 @@ class DouyinQrScanner:
                 cancelled,
                 deadline,
             )
-            return await self._capture_account(prepared, deadline)
+            return await self._capture_account(prepared, cancelled, deadline)
         finally:
             await prepared.context.close()
 
-    async def _capture_account(self, prepared, deadline) -> ScannedAccount:
+    async def _capture_account(self, prepared, cancelled, deadline) -> ScannedAccount:
         profile_name, profile_id = await self._await_stage(
-            self._optional_account_profile(prepared.context, deadline), None, deadline
+            self._optional_account_profile(prepared.context, deadline), cancelled, deadline
         )
         candidate = profile_name or await self._await_stage(
             self._optional_text(prepared.page, DISPLAY_NAME_SELECTOR),
-            None,
+            cancelled,
             deadline,
         )
         if _is_placeholder_name(candidate):
             candidate = None
         storage_state = await self._await_stage(
-            prepared.context.storage_state(), None, deadline
+            prepared.context.storage_state(), cancelled, deadline
         )
         if not candidate:
             from spark_console.services.accounts import _douyin_display_name
             stored_lookup = await self._await_stage(
-                asyncio.get_running_loop().run_in_executor(
-                    None, _douyin_display_name, storage_state
-                ),
-                None,
+                asyncio.to_thread(_douyin_display_name, storage_state),
+                cancelled,
                 deadline,
             )
             candidate = stored_lookup
         display_name = candidate or "抖音账号"
         unique_id = profile_id or await self._await_stage(
             self._optional_text(prepared.page, UNIQUE_ID_SELECTOR),
-            None,
+            cancelled,
             deadline,
         )
         conversation_names = await self._await_stage(
-            self._visible_conversation_names(prepared.page), None, deadline
+            self._visible_conversation_names(prepared.page), cancelled, deadline
         )
         contact_identities = await self._await_stage(
-            prepared.user_info.drain(), None, deadline
+            prepared.user_info.drain(), cancelled, deadline
         )
         platform_user_id = await self._await_stage(
-            read_verified_user_id(prepared.context), None, deadline
+            read_verified_user_id(prepared.context), cancelled, deadline
         )
         return ScannedAccount(
             display_name,
@@ -356,7 +354,7 @@ class DouyinQrScanner:
             platform_user_id,
         )
 
-    async def _sms_login_flow(self, prepared, on_stage, next_interaction, cancelled, deadline):
+    async def _sms_login_flow(self, prepared, on_stage, on_confirming, next_interaction, cancelled, deadline):
         page = prepared.page
         loop = asyncio.get_running_loop()
 
@@ -434,7 +432,7 @@ class DouyinQrScanner:
         code = await wait_action("text", 240)
         if not code:
             raise LoginTimedOut()
-        await on_confirming(True)
+        await self._callback(on_confirming, True)
         code_input = None
         for selector in ('input[placeholder*="验证码"]', 'input[inputmode*="numeric"]'):
             try:
@@ -714,7 +712,7 @@ class DouyinQrScanner:
                     logger.info("auth scan qrcode status=%s", public_status)
                     last_status = public_status
                 if status in {"2", "scanned", "3", "confirmed"}:
-                    await on_confirming(True)
+                    await self._callback(on_confirming, True)
         finally:
             page.remove_listener("response", capture)
 
@@ -733,7 +731,7 @@ class DouyinQrScanner:
                     logger.warning(
                         "auth scan qr consumed path=%s", urlparse(page.url).path
                     )
-                    await on_confirming(True)
+                    await self._callback(on_confirming, True)
             if confirmed_event.is_set():
                 current = self._auth_cookie_fingerprint(await context.cookies())
                 if current and current != baseline and not credentials_changed:

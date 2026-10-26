@@ -269,7 +269,7 @@ class ScanSessionServiceTests(unittest.TestCase):
         public = self.service.public_status(scan, self.clock.value)
 
         self.assertEqual(
-            {"id", "status", "remaining_seconds", "error", "message", "account_id"},
+            {"id", "status", "remaining_seconds", "error", "message", "account_id", "login_mode"},
             set(public),
         )
         self.assertEqual(scan.id, public["id"])

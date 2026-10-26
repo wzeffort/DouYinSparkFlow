@@ -109,6 +109,10 @@ class AuthWorker:
             with session_scope(self.engine) as db:
                 ScanSessionService(db).publish_view(scan_id, png)
 
+        def on_stage(stage: str) -> None:
+            with session_scope(self.engine) as db:
+                ScanSessionService(db).mark_stage(scan_id, stage)
+
         def next_interaction():
             with session_scope(self.engine) as db:
                 return ScanSessionService(db).claim_interaction(scan_id, self.cipher)
