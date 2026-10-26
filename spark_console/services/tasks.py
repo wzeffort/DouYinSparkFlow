@@ -294,7 +294,8 @@ class TaskService:
                 raise ValidationError('用户已停用，无法启用任务')
             capacity.assert_can_enable(owner)
             capacity.assert_slot_available(task.send_time, task.id)
-            if self.session.get(SparkTaskRecipient, (task.id, 0)):
+            if self.session.scalar(select(SparkTaskRecipient.task_id).where(
+                    SparkTaskRecipient.task_id == task.id).limit(1)) is not None:
                 self.assert_no_overlap(task.douyin_account_id, self.recipients_for(task), task.id)
                 capacity.bind_task(task)
             from spark_console.scheduler import compute_next_run
@@ -318,8 +319,10 @@ class TaskService:
     ) -> SparkTask:
         task = self.get_owned(owner_id, task_id)
         self.assert_not_running(task)
-        if recipients is None and self.session.get(SparkTaskRecipient, (task.id, 0)):
-            if self.session.get(SparkTaskRecipient, (task.id, 1)):
+        saved_recipients = self.session.scalars(select(SparkTaskRecipient).where(
+            SparkTaskRecipient.task_id == task.id).limit(2)).all()
+        if recipients is None and saved_recipients:
+            if len(saved_recipients) > 1:
                 raise ValidationError("多好友任务必须提交完整好友列表")
             recipients = [dict(target_name=target_name, target_sec_uid=target_sec_uid or "", message_template=message_template)]
         if recipients is not None:

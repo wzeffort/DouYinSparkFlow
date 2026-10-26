@@ -144,7 +144,8 @@ class Worker:
             account = db.get(DouyinAccount, task.douyin_account_id)
             credential_version = account.cookie_version
             target_identity = db.get(SparkTaskTargetIdentity, task.id)
-            is_batch = db.get(SparkTaskRecipient, (task.id, 0)) is not None
+            is_batch = db.scalar(select(SparkTaskRecipient.task_id).where(
+                SparkTaskRecipient.task_id == task.id).limit(1)) is not None
             pending_recipients = BatchRunService(db).prepare(run, task) if is_batch else []
             target_sec_uid = target_identity.sec_uid if target_identity else None
             cookies = account_service.decrypt_for_worker(task.douyin_account_id)
@@ -433,7 +434,16 @@ class Worker:
             )
             name = recipient.target_name if recipient is not None else ""
             if recipient is not None:
-                db.delete(recipient)
+                remaining = db.scalars(select(SparkTaskRecipient).where(
+                    SparkTaskRecipient.task_id == task.id)).all()
+                if len(remaining) == 1:
+                    # Keep the batch marker when the last recipient fails; a
+                    # legacy fallback must never resurrect a removed target.
+                    task.enabled = False
+                    task.next_run_at = None
+                else:
+                    db.delete(recipient)
+                db.flush()
             AuditService(db).write(
                 task.owner_user_id,
                 "task.recipient.auto_paused",
@@ -462,7 +472,7 @@ class Worker:
                 "task_failure",
                 {
                     "target_name": name or "某位好友",
-                    "reason": "该好友已连续 3 晚无法在抖音中唯一选中（昵称搜索命中多个结果或无法匹配），已自动从任务中移除；请给这位好友设置独特的备注名后，重新添加到任务。",
+                    "reason": "该好友已连续 3 晚无法在抖音中唯一选中；已从任务中移除，或在只剩一位好友时暂停整个任务。请设置独特的备注名后，编辑并重新启用任务。",
                     "action_path": f"/tasks/{task.id}/edit",
                 },
                 f"task-recipient-paused:{task.id}:{position}:{today.isoformat()}",
@@ -611,7 +621,7 @@ class Worker:
                 )
             ).all()
         )
-        for delay, code in zip(self.RETRY_DELAYS, retry_codes):
+        for delay, code in zip(delays, retry_codes):
             if code in used_codes:
                 continue
             minutes = int(delay.total_seconds() // 60)
