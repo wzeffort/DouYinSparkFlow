@@ -16,3 +16,6 @@ cloud_sources
 artifacts
 .pytest_cache
 *.bak-*
+
+# Exclude local account cookies from container builds.
+wz.json
