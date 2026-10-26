@@ -42,7 +42,7 @@ def failed_history(db, task, now):
         db.add(run)
         db.flush()
         db.add(models.TaskRunRecipient(run_id=run.id, position=0, account_id=task.douyin_account_id,
-            target_name='fixture', target_sec_uid='', message_template='fixture',
+            target_name='好友0', target_sec_uid='', message_template='fixture',
             status='failed', stage='selecting_target'))
     db.flush()
 

@@ -91,6 +91,11 @@ function createEnvironment(fetchImpl, {preload = false, mobile = false} = {}) {
     "#scan-placeholder",
     "#scan-text",
     "#scan-type",
+    "#scan-mode-toggle",
+    "#scan-phone",
+    "#scan-phone-send",
+    "#scan-phone-row",
+    ".scan-sms-hint",
   ];
   const elements = Object.fromEntries(selectors.map((selector) => [selector, new Element()]));
   elements["[data-account-scan]"].dataset.csrfToken = "csrf-fixture";
@@ -99,7 +104,10 @@ function createEnvironment(fetchImpl, {preload = false, mobile = false} = {}) {
   const windowListeners = new Map();
   const beacons = [];
   let nextTimer = 1;
-  global.document = {querySelector(selector) { return elements[selector]; }};
+  global.document = {
+    querySelector(selector) { return elements[selector]; },
+    querySelectorAll() { return []; },
+  };
   global.fetch = fetchImpl;
   Object.defineProperty(global, "navigator", {
     configurable: true,
@@ -267,7 +275,7 @@ async function qrStaysCachedWhilePolling() {
   await flush();
   assert(calls.length === 2, "status polling did not run exactly once");
   assert(elements["#scan-qr"].src.includes("/accounts/scan/scan-cached/qr"), "status polling lost the browser view");
-  assert(elements["#scan-qr"].srcSetCount > 1, "status polling did not refresh the live browser view");
+  assert(elements["#scan-qr"].srcSetCount === 1, "status polling bypassed the QR refresh throttle");
 }
 
 async function mobileCrop() {
@@ -307,10 +315,9 @@ async function pagehideCancel() {
   }));
 
   await elements["#scan-start"].emit("click");
-  windowListeners.get("pagehide")();
-  assert(beacons.length === 1, "page exit did not send a background cancellation");
-  assert(beacons[0].url === "/accounts/scan/scan-leaving/cancel", "page exit cancelled the wrong scan");
-  assert(beacons[0].body.includes("csrf_token=csrf-fixture"), "page exit cancellation omitted CSRF");
+  assert(!windowListeners.has("pagehide"), "switching to Douyin must not cancel the login");
+  windowListeners.get("pageshow")();
+  assert(beacons.length === 0, "app switch sent a cancellation");
 }
 
 async function successClose() {
@@ -402,8 +409,25 @@ async function main() {
   else if (scenario === "success-close") await successClose();
   else if (scenario === "browser-click") await browserClick();
   else if (scenario === "browser-text") await browserText();
+  else if (scenario === "desktop-start") await startByViewport(false);
+  else if (scenario === "mobile-start") await startByViewport(true);
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
+}
+
+async function startByViewport(mobile) {
+  const calls = [];
+  const {elements} = createEnvironment(async (url, options) => {
+    calls.push({url, options});
+    return response(201, {id: 'viewport-scan', status: mobile ? 'awaiting_phone' : 'awaiting_scan',
+      login_mode: mobile ? 'sms' : 'qr', remaining_seconds: 250, message: 'ready'});
+  }, {mobile});
+  assert(elements['#scan-start'].listeners.has('click'), 'initialization failed before click binding');
+  await elements['#scan-start'].emit('click');
+  assert(elements['#scan-dialog'].open, 'click did not open dialog');
+  assert(calls.length === 1 && calls[0].url === '/accounts/scan', 'click did not create exactly one session');
+  assert(new URLSearchParams(calls[0].options.body).get('mode') === (mobile ? 'sms' : 'qr'), 'wrong viewport login mode');
+  assert(elements['#scan-phone-row'].hidden === !mobile, 'phone input visibility incorrect');
 }
 
 main().catch((error) => {

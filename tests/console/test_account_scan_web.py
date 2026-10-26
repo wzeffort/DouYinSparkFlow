@@ -431,7 +431,7 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
-        self.assertIn('src="/static/account_scan.js?v=20260902-2"', response.text)
+        self.assertIn('src="/static/account_scan.js?v=20261026-1"', response.text)
         self.assertIn("修改备注", response.text)
         self.assertIn("当前仅支持短信验证码", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)

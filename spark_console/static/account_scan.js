@@ -34,6 +34,7 @@
   let cancelPending = false;
   let preparedState = null;
   let preloadPromise = null;
+  const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
   let smsMode = mobileView;
   let qrLoadedFor = null;
   let lastQrLoadAt = 0;
@@ -45,7 +46,6 @@
     // Both floors stay under the server's per-minute status limit.
     return currentStatus === "awaiting_scan" || currentStatus === "confirming" ? 1200 : 700;
   }
-  const mobileView = Boolean(window.matchMedia && window.matchMedia("(max-width: 760px)").matches);
 
   function clearTimer() {
     if (timer !== null) window.clearTimeout(timer);

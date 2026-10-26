@@ -7,7 +7,7 @@ import socket
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import or_, select, update
 
 from spark_console.config import Settings
 from spark_console.crypto import CookieCipher
@@ -250,7 +250,7 @@ class Worker:
                 )
             return finished
 
-    def _enrich_recipient_sec_uids(self, recipients, task_id, account_id):
+    def _enrich_recipient_sec_uids(self, recipients, task_id, account_id, *, run_id=None):
         # Recipients created before sec_uid capture rely on nickname search,
         # which times out for emoji and special-character names. The contact
         # identity store already knows each friend's sec_uid; resolve and
@@ -259,7 +259,9 @@ class Worker:
         pending = [r for r in recipients if not r.get("target_sec_uid")]
         if not pending:
             return
-        from spark_console.models import DouyinContactIdentity, SparkTaskRecipient
+        from spark_console.models import DouyinContactIdentity, SparkTaskRecipient, TaskRunRecipient
+        from spark_console.services.recipient_review import name_approvals
+        resolved = []
         try:
             with session_scope(self.engine) as db:
                 for recipient in pending:
@@ -269,24 +271,31 @@ class Worker:
                     identities = db.scalars(
                         select(DouyinContactIdentity).where(
                             DouyinContactIdentity.account_id == account_id,
-                            DouyinContactIdentity.nickname == name,
+                            or_(DouyinContactIdentity.nickname == name,
+                                DouyinContactIdentity.remark_name == name),
                         )
                     ).all()
-                    if not identities:
-                        identities = db.scalars(
-                            select(DouyinContactIdentity).where(
-                                DouyinContactIdentity.account_id == account_id,
-                                DouyinContactIdentity.remark_name == name,
-                            )
-                        ).all()
                     sec_uids = {i.sec_uid for i in identities if i.sec_uid}
                     if len(sec_uids) != 1:
                         continue
                     sec_uid = sec_uids.pop()
-                    recipient["target_sec_uid"] = sec_uid
                     row = db.get(SparkTaskRecipient, (task_id, recipient["position"]))
-                    if row is not None and not row.target_sec_uid:
-                        row.target_sec_uid = sec_uid
+                    if row is None or row.target_name != name or row.target_sec_uid not in ('', sec_uid):
+                        continue
+                    snapshot = db.get(TaskRunRecipient, (run_id, recipient['position'])) if run_id else None
+                    if run_id and (snapshot is None or snapshot.account_id != account_id
+                                   or snapshot.target_name != name or snapshot.target_sec_uid not in ('', sec_uid)):
+                        continue
+                    row.target_sec_uid = sec_uid
+                    if snapshot is not None:
+                        snapshot.target_sec_uid = sec_uid
+                    approvals = name_approvals(db, account_id, sec_uid, name)
+                    resolved.append((recipient, sec_uid, approvals))
+            # Do not let a failed commit leave in-memory identity ahead of the
+            # durable task and run snapshot used by retries.
+            for recipient, sec_uid, approvals in resolved:
+                recipient['target_sec_uid'] = sec_uid
+                recipient['name_approvals'] = approvals
         except Exception:
             # Enrichment is an optimisation; search remains the safe fallback.
             pass
@@ -294,7 +303,7 @@ class Worker:
     async def _run_batch(self, run_id, task_id, account_id, cookies, credential_version, recipients, now):
         from spark_console.message_content import render_content, parse_content
         from spark_console.models import RunMessageContent, TaskRunRecipient
-        self._enrich_recipient_sec_uids(recipients, task_id, account_id)
+        self._enrich_recipient_sec_uids(recipients, task_id, account_id, run_id=run_id)
         # Resolve external content once, outside a DB write transaction and before
         # opening the browser. The committed text is reused by all retry paths.
         for recipient in recipients:
@@ -402,6 +411,9 @@ class Worker:
                 TaskRunRecipient.status,
                 TaskRunRecipient.stage,
                 TaskRun.scheduled_for,
+                TaskRunRecipient.account_id,
+                TaskRunRecipient.target_sec_uid,
+                TaskRunRecipient.target_name,
             )
             .join(TaskRun, TaskRun.id == TaskRunRecipient.run_id)
             .where(
@@ -410,8 +422,20 @@ class Worker:
             )
             .order_by(TaskRun.scheduled_for.asc())
         ).all()
+        current_recipients = {r.position: r for r in db.scalars(
+            select(SparkTaskRecipient).where(SparkTaskRecipient.task_id == task.id)).all()}
         by_position: dict = {}
-        for position, row_status, row_stage, scheduled_for in rows:
+        for position, row_status, row_stage, scheduled_for, account_id, sec_uid, target_name in rows:
+            current = current_recipients.get(position)
+            if current is None or account_id != task.douyin_account_id:
+                continue
+            if current.target_sec_uid:
+                if sec_uid != current.target_sec_uid:
+                    continue
+            elif sec_uid or target_name != current.target_name:
+                continue
+            if scheduled_for.tzinfo is None:
+                scheduled_for = scheduled_for.replace(tzinfo=timezone.utc)
             day = scheduled_for.astimezone(zone).date()
             by_position.setdefault(position, {})[day] = (row_status, row_stage)
         today = now.astimezone(zone).date()

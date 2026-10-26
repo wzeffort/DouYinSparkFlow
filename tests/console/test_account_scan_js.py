@@ -40,8 +40,14 @@ class AccountScanJavaScriptTests(unittest.TestCase):
     def test_status_polling_refreshes_the_live_cloud_browser_view(self):
         self.run_scenario("qr-stays-cached")
 
-    def test_leaving_page_sends_background_cancellation(self):
+    def test_switching_apps_preserves_scan_session(self):
         self.run_scenario("pagehide-cancel")
+
+    def test_desktop_button_initializes_and_starts_qr_login(self):
+        self.run_scenario("desktop-start")
+
+    def test_mobile_button_initializes_and_starts_sms_login(self):
+        self.run_scenario("mobile-start")
 
     def test_success_message_closes_dialog_before_refresh(self):
         self.run_scenario("success-close")
