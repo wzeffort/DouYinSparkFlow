@@ -117,6 +117,22 @@ class AccountScanWebTests(unittest.TestCase):
             )
         return scan_id
 
+    def test_non_ascii_verification_codes_return_400_without_server_error(self):
+        scan_id = self._awaiting_scan()
+        for value in ("１２３４５６", "١٢٣٤٥٦", "²²²²"):
+            with self.subTest(kind="non_ascii_digits"):
+                response = self.owner_client.post(
+                    f"/accounts/scan/{scan_id}/interact",
+                    data={"csrf_token": self.owner_csrf, "kind": "text", "text": value},
+                )
+                self.assertEqual(400, response.status_code)
+                self.assertEqual("invalid_interaction", response.json()["error"])
+        response = self.owner_client.post(
+            f"/accounts/scan/{scan_id}/interact",
+            data={"csrf_token": self.owner_csrf, "kind": "text", "text": "123456"},
+        )
+        self.assertEqual(202, response.status_code)
+
     def test_authenticated_owner_can_start_with_csrf_and_client_fields_are_ignored(self):
         response = self.owner_client.post(
             "/accounts/scan",
@@ -139,6 +155,7 @@ class AccountScanWebTests(unittest.TestCase):
                 "error",
                 "message",
                 "account_id",
+                "login_mode",
             },
             set(response.json()),
         )
@@ -198,10 +215,10 @@ class AccountScanWebTests(unittest.TestCase):
             self.owner_client.post(
                 "/accounts/scan", data={"csrf_token": self.owner_csrf}
             )
-            for _ in range(6)
+            for _ in range(9)
         ]
 
-        self.assertEqual([201, 200, 200, 200, 200, 429], [r.status_code for r in responses])
+        self.assertEqual([201] + [200] * 7 + [429], [r.status_code for r in responses])
         self.assertEqual(
             {"error": "rate_limited", "message": "请求过于频繁，请稍后重试"},
             responses[-1].json(),
@@ -211,14 +228,14 @@ class AccountScanWebTests(unittest.TestCase):
         scan_id = self._awaiting_scan()
 
         status_responses = [
-            self.owner_client.get(f"/accounts/scan/{scan_id}") for _ in range(41)
+            self.owner_client.get(f"/accounts/scan/{scan_id}") for _ in range(121)
         ]
         qr_responses = [
-            self.owner_client.get(f"/accounts/scan/{scan_id}/qr") for _ in range(41)
+            self.owner_client.get(f"/accounts/scan/{scan_id}/qr") for _ in range(81)
         ]
 
-        self.assertTrue(all(response.status_code == 200 for response in status_responses[:40]))
-        self.assertTrue(all(response.status_code == 200 for response in qr_responses[:40]))
+        self.assertTrue(all(response.status_code == 200 for response in status_responses[:120]))
+        self.assertTrue(all(response.status_code == 200 for response in qr_responses[:80]))
         for response in (status_responses[-1], qr_responses[-1]):
             self.assertEqual(429, response.status_code)
             self.assertEqual(
@@ -257,6 +274,7 @@ class AccountScanWebTests(unittest.TestCase):
                 "error",
                 "message",
                 "account_id",
+                "login_mode",
             },
             set(response.json()),
         )
@@ -431,7 +449,7 @@ class AccountScanWebTests(unittest.TestCase):
         self.assertEqual(200, response.status_code)
         self.assertIn("扫码绑定抖音账号", response.text)
         self.assertIn("<dialog", response.text)
-        self.assertIn('src="/static/account_scan.js?v=20261026-1"', response.text)
+        self.assertIn('src="/static/account_scan.js?v=20261026-4"', response.text)
         self.assertIn("修改备注", response.text)
         self.assertIn("当前仅支持短信验证码", response.text)
         self.assertIn(f'action="/accounts/{self.account_id}/rename"', response.text)

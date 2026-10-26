@@ -22,6 +22,9 @@ class AccountScanJavaScriptTests(unittest.TestCase):
         self.assertEqual(0, completed.returncode, completed.stderr)
         self.assertIn(f'"scenario":"{scenario}"', completed.stdout)
 
+    def test_phone_submission_keeps_one_poll_even_during_inflight_status(self):
+        self.run_scenario("phone-single-poll")
+
     def test_cancelled_preloaded_session_is_not_reused(self):
         self.run_scenario("retry-cancelled")
 

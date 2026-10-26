@@ -432,6 +432,30 @@ async function qrSecondarySms() {
   assert(!elements["#scan-type"].disabled, "QR secondary SMS submit is disabled");
 }
 
+async function phoneSubmitKeepsSinglePoll() {
+  let polls = 0;
+  const pendingPoll = deferred();
+  const {elements, timers} = createEnvironment(async (url) => {
+    if (url.endsWith("/interact")) return response(202, {accepted: true});
+    if (url === "/accounts/scan") return response(201, {id: "sms", status: "awaiting_phone", login_mode: "sms"});
+    polls += 1;
+    return pendingPoll.promise;
+  }, {mobile: true});
+  await elements["#scan-start"].emit("click");
+  elements["#scan-phone"].value = "13800000000";
+  await elements["#scan-phone-send"].emit("click");
+  assert(timers.size === 1, "phone submission created a second poll timer");
+  const [id, timer] = [...timers.entries()][0];
+  timers.delete(id); // Browser removes a one-shot timer before its callback.
+  timer.callback();
+  await flush();
+  await elements["#scan-phone-send"].emit("click");
+  assert(timers.size === 0, "submission while polling started another timer");
+  pendingPoll.resolve(response(200, {id: "sms", status: "awaiting_sms", login_mode: "sms"}));
+  await flush();
+  assert(polls === 1 && timers.size === 1, "poll completion did not retain exactly one loop");
+}
+
 async function main() {
   const scenario = process.argv[2];
   if (scenario === "pending-close") await pendingIntent("#scan-close");
@@ -449,6 +473,7 @@ async function main() {
   else if (scenario === "retry-cancelled") await restartAfterCancel(false);
   else if (scenario === "toggle-after-preload") await restartAfterCancel(true);
   else if (scenario === "qr-secondary-sms") await qrSecondarySms();
+  else if (scenario === "phone-single-poll") await phoneSubmitKeepsSinglePoll();
   else throw new Error(`unknown scenario: ${scenario}`);
   process.stdout.write(JSON.stringify({scenario, ok: true}));
 }

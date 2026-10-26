@@ -166,7 +166,7 @@ class ScanSessionServiceTests(unittest.TestCase):
             hasattr(self.service, "queue_text"),
             "scan service must expose encrypted browser text queueing",
         )
-        for value in ("", "123", "123456789", "12a456", "1234\n"):
+        for value in ("", "123", "123456789", "12a456", "1234\n", "１２３４５６", "١٢٣٤٥٦", "²²²²"):
             with self.subTest(value=value):
                 with self.assertRaises(ValidationError):
                     self.service.queue_text(self.owner.id, scan.id, value, cipher)

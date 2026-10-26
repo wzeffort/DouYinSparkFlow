@@ -254,7 +254,7 @@ class ScanSessionService:
         value: str,
         cipher: CookieCipher,
     ) -> DouyinLoginInput:
-        if not isinstance(value, str) or not value.isdigit() or not 4 <= len(value) <= 8:
+        if not isinstance(value, str) or re.fullmatch(r"[0-9]{4,8}", value) is None:
             raise ValidationError("invalid_interaction")
         scan = self.get_owned(owner_id, scan_id)
         if scan.slot != "global" or self._status(scan) not in ACTIVE_STATUSES:

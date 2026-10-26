@@ -169,7 +169,7 @@
       const body = await readJson(response);
       showMessage(body.message || "验证码发送中，请留意短信", 0);
       phoneButton.disabled = false;
-      timer = window.setTimeout(pollScan, 800);
+      // The existing status poll owns scheduling; do not start a second loop.
     } catch (error) {
       phoneButton.disabled = false;
       showMessage(error.message || "发送失败，请重试", 0);
